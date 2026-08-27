@@ -129,19 +129,19 @@ depends_on = ["macos-package-contract"]
 [[steps]]
 id = "macos-student-setup"
 title = "Add a thin setup.sh bootstrap and extend setup pins and setup.ps1 to install pinned repository-local Mac Arm GNU, CMake, Ninja, PowerShell, and verified core tools"
-status = "active"
+status = "done"
 depends_on = ["multi-platform-release-flow"]
 
 [[steps]]
 id = "automated-macos-contract-tests"
 title = "Add Mac-aware setup, firmware build, host self-test, package, manifest, timeout, parser, and release dry-run coverage"
-status = "pending"
+status = "done"
 depends_on = ["portable-build-entry-points", "macos-package-contract", "macos-student-setup"]
 
 [[steps]]
 id = "macos-board-acceptance"
 title = "On the FRDM-MCXN947, prove runtime CDC discovery, AVCU camera and telemetry display, ROM entry, erase/write/full readback/reset, reconnect, and physical recovery"
-status = "pending"
+status = "active"
 depends_on = ["macos-viewer-app", "automated-macos-contract-tests"]
 
 [[steps]]
