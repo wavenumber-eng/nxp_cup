@@ -1,10 +1,25 @@
-#define NOMINMAX
-
 #include "nxpc_host_core.hpp"
 
+#if defined(_WIN32)
+#define NOMINMAX
 #include <windows.h>
 #include <hidsdi.h>
 #include <setupapi.h>
+#elif defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/hid/IOHIDKeys.h>
+#include <IOKit/hid/IOHIDLib.h>
+#include <IOKit/serial/IOSerialKeys.h>
+#include <cerrno>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <unistd.h>
+#else
+#error "nxpc_host_core supports Windows and macOS only"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -32,6 +47,7 @@ constexpr uint32_t kKnownChunkFlags =
     NXPC_DBG_RUI_CHUNK_FRAME_START | NXPC_DBG_RUI_CHUNK_FRAME_END | NXPC_DBG_RUI_CHUNK_STALE_OK;
 constexpr size_t kRetainedRecords = 128u;
 
+#if defined(_WIN32)
 std::string win32_error(const std::string &operation)
 {
     const DWORD code = GetLastError();
@@ -58,6 +74,7 @@ std::string win32_error(const std::string &operation)
     }
     return out.str();
 }
+#endif
 
 std::string upper_copy(std::string text)
 {
@@ -66,6 +83,7 @@ std::string upper_copy(std::string text)
     return text;
 }
 
+#if defined(_WIN32)
 std::string registry_string_property(HDEVINFO devices, SP_DEVINFO_DATA &info, DWORD property)
 {
     std::array<char, 2048> buffer{};
@@ -176,6 +194,91 @@ std::string normalize_port_name(const std::string &port_name)
     }
     return "\\\\.\\" + port_name;
 }
+#elif defined(__APPLE__)
+std::string posix_error(const std::string &operation)
+{
+    return operation + " failed: " + std::strerror(errno);
+}
+
+std::string cf_string(CFTypeRef value)
+{
+    if ((value == nullptr) || (CFGetTypeID(value) != CFStringGetTypeID()))
+    {
+        return {};
+    }
+    const auto string = static_cast<CFStringRef>(value);
+    const CFIndex length = CFStringGetLength(string);
+    const CFIndex bytes = CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1;
+    std::vector<char> buffer(static_cast<size_t>(bytes));
+    if (!CFStringGetCString(string, buffer.data(), bytes, kCFStringEncodingUTF8))
+    {
+        return {};
+    }
+    return std::string(buffer.data());
+}
+
+uint32_t cf_number(CFTypeRef value)
+{
+    if ((value == nullptr) || (CFGetTypeID(value) != CFNumberGetTypeID()))
+    {
+        return 0u;
+    }
+    uint32_t result = 0u;
+    (void)CFNumberGetValue(static_cast<CFNumberRef>(value), kCFNumberSInt32Type, &result);
+    return result;
+}
+
+CFTypeRef registry_property(io_registry_entry_t service, CFStringRef key)
+{
+    return IORegistryEntrySearchCFProperty(service, kIOServicePlane, key, kCFAllocatorDefault,
+                                           kIORegistryIterateRecursively |
+                                               kIORegistryIterateParents);
+}
+
+std::string registry_string(io_registry_entry_t service, CFStringRef key)
+{
+    CFTypeRef value = registry_property(service, key);
+    const std::string result = cf_string(value);
+    if (value != nullptr)
+    {
+        CFRelease(value);
+    }
+    return result;
+}
+
+uint32_t registry_number(io_registry_entry_t service, CFStringRef key)
+{
+    CFTypeRef value = registry_property(service, key);
+    const uint32_t result = cf_number(value);
+    if (value != nullptr)
+    {
+        CFRelease(value);
+    }
+    return result;
+}
+
+std::string usb_hardware_id(uint16_t vid, uint16_t pid)
+{
+    std::ostringstream out;
+    out << "VID_" << std::uppercase << std::hex;
+    out.width(4);
+    out.fill('0');
+    out << vid << "&PID_";
+    out.width(4);
+    out << pid;
+    return out.str();
+}
+
+int serial_fd(void *handle)
+{
+    return static_cast<int>(reinterpret_cast<intptr_t>(handle) - 1);
+}
+
+void *serial_handle(int fd)
+{
+    return reinterpret_cast<void *>(static_cast<intptr_t>(fd) + 1);
+}
+#endif
 
 template <typename T> void append_object(std::vector<uint8_t> &bytes, const T &object)
 {
@@ -196,6 +299,7 @@ template <typename T> void retain_bounded(std::vector<T> &records)
 
 std::vector<SerialDevice> list_serial_devices(std::string &error)
 {
+#if defined(_WIN32)
     error.clear();
     std::vector<SerialDevice> result;
 
@@ -246,6 +350,63 @@ std::vector<SerialDevice> list_serial_devices(std::string &error)
 
     SetupDiDestroyDeviceInfoList(devices);
     return result;
+#elif defined(__APPLE__)
+    error.clear();
+    std::vector<SerialDevice> result;
+    CFMutableDictionaryRef matching = IOServiceMatching(kIOSerialBSDServiceValue);
+    if (matching == nullptr)
+    {
+        error = "IOServiceMatching(IOSerialBSDClient) failed";
+        return result;
+    }
+    CFDictionarySetValue(matching, CFSTR(kIOSerialBSDTypeKey), CFSTR(kIOSerialBSDAllTypes));
+
+    io_iterator_t iterator = IO_OBJECT_NULL;
+    const kern_return_t status =
+        IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator);
+    if (status != KERN_SUCCESS)
+    {
+        error = "IOServiceGetMatchingServices(serial) failed: " + std::to_string(status);
+        return result;
+    }
+
+    for (io_object_t service = IOIteratorNext(iterator); service != IO_OBJECT_NULL;
+         service = IOIteratorNext(iterator))
+    {
+        SerialDevice device;
+        CFTypeRef path = IORegistryEntryCreateCFProperty(service, CFSTR(kIOCalloutDeviceKey),
+                                                         kCFAllocatorDefault, 0u);
+        device.port_name = cf_string(path);
+        if (path != nullptr)
+        {
+            CFRelease(path);
+        }
+        if (!device.port_name.empty())
+        {
+            device.friendly_name = registry_string(service, CFSTR("USB Product Name"));
+            if (device.friendly_name.empty())
+            {
+                device.friendly_name = registry_string(service, CFSTR(kIOTTYDeviceKey));
+            }
+            device.vid = static_cast<uint16_t>(registry_number(service, CFSTR("idVendor")));
+            device.pid = static_cast<uint16_t>(registry_number(service, CFSTR("idProduct")));
+            device.hardware_id = usb_hardware_id(device.vid, device.pid);
+            device.instance_id = registry_string(service, CFSTR("USB Serial Number"));
+            if (device.instance_id.empty())
+            {
+                uint64_t registry_id = 0u;
+                if (IORegistryEntryGetRegistryEntryID(service, &registry_id) == KERN_SUCCESS)
+                {
+                    device.instance_id = "IOService:" + std::to_string(registry_id);
+                }
+            }
+            result.push_back(std::move(device));
+        }
+        IOObjectRelease(service);
+    }
+    IOObjectRelease(iterator);
+    return result;
+#endif
 }
 
 std::vector<SerialDevice> find_serial_devices(uint16_t vid, uint16_t pid, std::string &error)
@@ -327,6 +488,7 @@ bool select_unique_runtime_port(const std::string &requested_port, SerialDevice 
 
 std::vector<HidDevice> list_hid_devices(std::string &error)
 {
+#if defined(_WIN32)
     error.clear();
     std::vector<HidDevice> result;
     GUID hid_guid{};
@@ -389,6 +551,47 @@ std::vector<HidDevice> list_hid_devices(std::string &error)
 
     SetupDiDestroyDeviceInfoList(devices);
     return result;
+#elif defined(__APPLE__)
+    error.clear();
+    std::vector<HidDevice> result;
+    IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+    if (manager == nullptr)
+    {
+        error = "IOHIDManagerCreate failed";
+        return result;
+    }
+    IOHIDManagerSetDeviceMatching(manager, nullptr);
+
+    CFSetRef devices = IOHIDManagerCopyDevices(manager);
+    if (devices != nullptr)
+    {
+        const CFIndex count = CFSetGetCount(devices);
+        std::vector<const void *> values(static_cast<size_t>(count));
+        CFSetGetValues(devices, values.data());
+        for (const void *value : values)
+        {
+            auto device_ref = static_cast<IOHIDDeviceRef>(const_cast<void *>(value));
+            HidDevice device;
+            device.vid = static_cast<uint16_t>(
+                cf_number(IOHIDDeviceGetProperty(device_ref, CFSTR(kIOHIDVendorIDKey))));
+            device.pid = static_cast<uint16_t>(
+                cf_number(IOHIDDeviceGetProperty(device_ref, CFSTR(kIOHIDProductIDKey))));
+            device.friendly_name =
+                cf_string(IOHIDDeviceGetProperty(device_ref, CFSTR(kIOHIDProductKey)));
+            const std::string serial =
+                cf_string(IOHIDDeviceGetProperty(device_ref, CFSTR(kIOHIDSerialNumberKey)));
+            const uint32_t location =
+                cf_number(IOHIDDeviceGetProperty(device_ref, CFSTR(kIOHIDLocationIDKey)));
+            device.hardware_id = usb_hardware_id(device.vid, device.pid);
+            device.instance_id = !serial.empty() ? serial : "IOHID:" + std::to_string(location);
+            device.device_path = device.instance_id;
+            result.push_back(std::move(device));
+        }
+        CFRelease(devices);
+    }
+    CFRelease(manager);
+    return result;
+#endif
 }
 
 std::vector<HidDevice> find_hid_devices(uint16_t vid, uint16_t pid, std::string &error)
@@ -422,6 +625,7 @@ bool SerialPort::open(const std::string &port_name, uint32_t baud, uint32_t rx_b
                       std::string &error)
 {
     close();
+#if defined(_WIN32)
     HANDLE handle =
         CreateFileA(normalize_port_name(port_name).c_str(), GENERIC_READ | GENERIC_WRITE, 0u,
                     nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -478,6 +682,44 @@ bool SerialPort::open(const std::string &port_name, uint32_t baud, uint32_t rx_b
     (void)EscapeCommFunction(handle, SETRTS);
     handle_ = handle;
     return clear_input(error);
+#elif defined(__APPLE__)
+    (void)rx_buffer_bytes;
+    const int fd = ::open(port_name.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0)
+    {
+        error = posix_error("open " + port_name);
+        return false;
+    }
+
+    termios options{};
+    if (tcgetattr(fd, &options) != 0)
+    {
+        error = posix_error("tcgetattr");
+        ::close(fd);
+        return false;
+    }
+    cfmakeraw(&options);
+    options.c_cflag |= CLOCAL | CREAD;
+    options.c_cflag &= static_cast<tcflag_t>(~(PARENB | CSTOPB | CSIZE));
+    options.c_cflag |= CS8;
+    if (cfsetspeed(&options, static_cast<speed_t>(baud)) != 0)
+    {
+        error = posix_error("cfsetspeed");
+        ::close(fd);
+        return false;
+    }
+    if (tcsetattr(fd, TCSANOW, &options) != 0)
+    {
+        error = posix_error("tcsetattr");
+        ::close(fd);
+        return false;
+    }
+
+    int modem_bits = TIOCM_DTR | TIOCM_RTS;
+    (void)ioctl(fd, TIOCMBIS, &modem_bits);
+    handle_ = serial_handle(fd);
+    return clear_input(error);
+#endif
 }
 
 int SerialPort::read(uint8_t *buffer, uint32_t buffer_bytes, std::string &error)
@@ -487,6 +729,7 @@ int SerialPort::read(uint8_t *buffer, uint32_t buffer_bytes, std::string &error)
         error = "serial port is not open";
         return -1;
     }
+#if defined(_WIN32)
     DWORD received = 0u;
     if (!ReadFile(reinterpret_cast<HANDLE>(handle_), buffer, buffer_bytes, &received, nullptr))
     {
@@ -494,6 +737,47 @@ int SerialPort::read(uint8_t *buffer, uint32_t buffer_bytes, std::string &error)
         return -1;
     }
     return static_cast<int>(received);
+#elif defined(__APPLE__)
+    pollfd descriptor{serial_fd(handle_), POLLIN, 0};
+    int poll_result = 0;
+    do
+    {
+        poll_result = poll(&descriptor, 1u, 50);
+    } while ((poll_result < 0) && (errno == EINTR));
+    if (poll_result < 0)
+    {
+        error = posix_error("poll");
+        return -1;
+    }
+    if (poll_result == 0)
+    {
+        error.clear();
+        return 0;
+    }
+    if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+    {
+        error = "serial port disconnected";
+        return -1;
+    }
+
+    ssize_t received = 0;
+    do
+    {
+        received = ::read(descriptor.fd, buffer, buffer_bytes);
+    } while ((received < 0) && (errno == EINTR));
+    if ((received < 0) && ((errno == EAGAIN) || (errno == EWOULDBLOCK)))
+    {
+        error.clear();
+        return 0;
+    }
+    if (received < 0)
+    {
+        error = posix_error("read");
+        return -1;
+    }
+    error.clear();
+    return static_cast<int>(received);
+#endif
 }
 
 bool SerialPort::write_all(const uint8_t *data, uint32_t data_bytes, std::string &error)
@@ -503,6 +787,7 @@ bool SerialPort::write_all(const uint8_t *data, uint32_t data_bytes, std::string
         error = "serial port is not open";
         return false;
     }
+#if defined(_WIN32)
     uint32_t offset = 0u;
     while (offset < data_bytes)
     {
@@ -522,6 +807,65 @@ bool SerialPort::write_all(const uint8_t *data, uint32_t data_bytes, std::string
     }
     error.clear();
     return true;
+#elif defined(__APPLE__)
+    uint32_t offset = 0u;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (offset < data_bytes)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+        {
+            error = "serial write timed out";
+            return false;
+        }
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+        pollfd descriptor{serial_fd(handle_), POLLOUT, 0};
+        int poll_result = 0;
+        do
+        {
+            poll_result = poll(&descriptor, 1u, static_cast<int>(std::max<int64_t>(1, remaining)));
+        } while ((poll_result < 0) && (errno == EINTR));
+        if (poll_result < 0)
+        {
+            error = posix_error("poll");
+            return false;
+        }
+        if (poll_result == 0)
+        {
+            error = "serial write timed out";
+            return false;
+        }
+        if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+        {
+            error = "serial port disconnected";
+            return false;
+        }
+
+        ssize_t written = 0;
+        do
+        {
+            written = ::write(descriptor.fd, data + offset, data_bytes - offset);
+        } while ((written < 0) && (errno == EINTR));
+        if ((written < 0) && ((errno == EAGAIN) || (errno == EWOULDBLOCK)))
+        {
+            continue;
+        }
+        if (written < 0)
+        {
+            error = posix_error("write");
+            return false;
+        }
+        if (written == 0)
+        {
+            error = "serial write made no progress";
+            return false;
+        }
+        offset += static_cast<uint32_t>(written);
+    }
+    error.clear();
+    return true;
+#endif
 }
 
 bool SerialPort::clear_input(std::string &error)
@@ -531,11 +875,19 @@ bool SerialPort::clear_input(std::string &error)
         error = "serial port is not open";
         return false;
     }
+#if defined(_WIN32)
     if (!PurgeComm(reinterpret_cast<HANDLE>(handle_), PURGE_RXCLEAR))
     {
         error = win32_error("PurgeComm");
         return false;
     }
+#elif defined(__APPLE__)
+    if (tcflush(serial_fd(handle_), TCIFLUSH) != 0)
+    {
+        error = posix_error("tcflush");
+        return false;
+    }
+#endif
     error.clear();
     return true;
 }
@@ -544,7 +896,11 @@ void SerialPort::close()
 {
     if (handle_ != nullptr)
     {
+#if defined(_WIN32)
         CloseHandle(reinterpret_cast<HANDLE>(handle_));
+#elif defined(__APPLE__)
+        (void)::close(serial_fd(handle_));
+#endif
         handle_ = nullptr;
     }
 }

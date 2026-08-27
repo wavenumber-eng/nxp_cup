@@ -1,7 +1,10 @@
-# Windows and Browser Host Tools
+# Windows, macOS, and Browser Host Tools
 
-This component contains the native Windows camera/telemetry viewer, the
-one-cable programming CLI, and the direct WebSerial viewer.
+This component contains the native Windows and Apple Silicon macOS
+camera/telemetry viewer, the one-cable programming CLI, and the direct
+WebSerial viewer. Students should begin with the platform setup guide: the
+[Windows guide](../../docs/setup.html) or the
+[Apple Silicon macOS guide](../../docs/setup-macos.md).
 
 ## Native build
 
@@ -11,11 +14,17 @@ Run from the repository root:
 .\src\host\build.ps1
 ```
 
-LLVM-MinGW is the canonical compiler installed by root
-`setup.ps1 -IncludeMaintainerTools`. Ordinary setup installs the pinned prebuilt
-runtime instead. The maintainer build produces the viewer and CLI, copies SDL2
-and the pinned ROM programmer beside them, and publishes a runnable bundle under
-`out\artifacts\host`.
+On macOS, invoke the same build entry point through PowerShell 7:
+
+```sh
+pwsh -NoProfile -File src/host/build.ps1
+```
+
+LLVM-MinGW is the canonical Windows compiler installed by root
+`setup.ps1 -IncludeMaintainerTools`; macOS uses AppleClang. Ordinary students use
+the prebuilt runtime instead. The maintainer build produces the viewer and CLI,
+includes the pinned ROM programmer, and publishes a runnable bundle under
+`out/artifacts/host`.
 
 Useful commands:
 
@@ -32,10 +41,25 @@ The viewer test command expects a connected telemetry device; the CLI
 automatically resolves the published embedded image even when the viewer is
 launched from `out\artifacts\host` instead of the repository root.
 
+The equivalent macOS checks are:
+
+```sh
+out/artifacts/host/nxpc_tool selftest
+out/artifacts/host/nxpc_tool devices
+out/artifacts/host/nxpc_tool probe --frame --seconds 3
+'out/artifacts/host/NXP Cup Viewer.app/Contents/MacOS/NXP Cup Viewer' --test-seconds 5
+```
+
 Create a deterministic, versioned portable zip and checksum with:
 
 ```powershell
 .\src\host\package.ps1 -Version 1.0.0
+```
+
+On macOS, an ad-hoc package needs no Apple account or Developer ID certificate:
+
+```sh
+pwsh -NoProfile -File src/host/package.ps1 -Version 0.1.0 -SigningIdentity -
 ```
 
 Packaging refuses to replace an existing version unless `-Force` is explicit.

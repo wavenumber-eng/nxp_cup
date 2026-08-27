@@ -18,6 +18,8 @@ HOST_BUILD = REPO / "src/host/build.ps1"
 ANDROID_BUILD = REPO / "src/android/build.ps1"
 ANDROID_TOOL_BUILD = REPO / "src/android/tools/build-project.ps1"
 HOST_VIEWER = REPO / "src/host/nxpc_viewer.cpp"
+HOST_VIEWER_PLATFORM_WINDOWS = REPO / "src/host/nxpc_viewer_platform_windows.cpp"
+HOST_VIEWER_PLATFORM_MACOS = REPO / "src/host/nxpc_viewer_platform_macos.mm"
 ANDROID_RELAY_VIEWER = (
     REPO / "src/android/nxp_cup_bridge/app/src/main/res/raw/relay_viewer.html"
 )
@@ -270,7 +272,8 @@ def test_setup_compiler_builds_the_native_host():
     assert "MartinStorsjo.LLVM-MinGW.UCRT" in setup
     assert 'Get-Command "clang++"' in host_build
     assert '"Ninja Multi-Config"' in host_build
-    assert 'out/build/host/cmake-clang' in host_build
+    assert '"cmake-clang"' in host_build
+    assert '"cmake-clang-macos-arm64"' in host_build
     assert '[ValidateSet("Clang", "MSVC")]' in host_build
 
 
@@ -291,8 +294,12 @@ def test_component_builds_publish_under_out():
 
 def test_host_viewer_uses_published_firmware_location():
     viewer = HOST_VIEWER.read_text(encoding="utf-8")
+    windows_platform = HOST_VIEWER_PLATFORM_WINDOWS.read_text(encoding="utf-8")
+    macos_platform = HOST_VIEWER_PLATFORM_MACOS.read_text(encoding="utf-8")
     assert 'fs::path("out") / "artifacts" / "embedded" / "nxp_cup_core0.bin"' in viewer
-    assert "GetModuleFileNameA" in viewer
+    assert "current_executable_path" in viewer
+    assert "GetModuleFileNameW" in windows_platform
+    assert "[[NSBundle mainBundle] executableURL]" in macos_platform
     assert "out\\build\\embedded\\competition\\nxp_cup_core0.bin" not in viewer
     assert 'ImGui::Button("Program and reconnect"' in viewer
     assert 'ImGui::CalcTextSize("Browse...")' in viewer

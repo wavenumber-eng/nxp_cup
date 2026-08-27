@@ -31,15 +31,35 @@ function Get-AttachedJLinkSerial {
     $serials = @()
 
     try {
-        $devices = Get-PnpDevice -PresentOnly -ErrorAction Stop |
-            Where-Object { $_.InstanceId -match '^USB\\VID_1366&PID_[0-9A-Fa-f]{4}\\[0-9]+$' }
+        $runningOnMac = ($PSVersionTable.PSEdition -eq "Core") -and $IsMacOS
+        if ($runningOnMac) {
+            $ioreg = Get-Command ioreg -ErrorAction Stop | Select-Object -First 1
+            $inventory = (& $ioreg.Source -p IOUSB -l -w 0 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) {
+                throw "ioreg failed with exit code $LASTEXITCODE"
+            }
+            foreach ($block in ($inventory -split '(?m)^\s*\+-o ')) {
+                if ($block -notmatch '"idVendor"\s*=\s*(4966|0x1366)') {
+                    continue
+                }
+                if ($block -match '"(?:USB Serial Number|kUSBSerialNumberString)"\s*=\s*"([0-9]+)"') {
+                    $trimmed = $Matches[1].TrimStart('0')
+                    if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+                        $serials += $trimmed
+                    }
+                }
+            }
+        } else {
+            $devices = Get-PnpDevice -PresentOnly -ErrorAction Stop |
+                Where-Object { $_.InstanceId -match '^USB\\VID_1366&PID_[0-9A-Fa-f]{4}\\[0-9]+$' }
 
-        foreach ($d in $devices) {
-            $sn = ($d.InstanceId -split '\\')[-1]
-            # Instance IDs are zero-padded; J-Link tools want the bare number.
-            $trimmed = $sn.TrimStart('0')
-            if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
-                $serials += $trimmed
+            foreach ($d in $devices) {
+                $sn = ($d.InstanceId -split '\\')[-1]
+                # Instance IDs are zero-padded; J-Link tools want the bare number.
+                $trimmed = $sn.TrimStart('0')
+                if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+                    $serials += $trimmed
+                }
             }
         }
     } catch {

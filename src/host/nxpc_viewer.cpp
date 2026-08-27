@@ -1,10 +1,6 @@
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <commdlg.h>
-
 #include "nxpc_host_core.hpp"
 #include "nxpc_programmer.hpp"
+#include "nxpc_viewer_platform.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
@@ -97,6 +93,13 @@ void constrain_camera_aspect(ImGuiSizeCallbackData *data)
 
 float display_dpi_scale(int display_index)
 {
+#if defined(__APPLE__)
+    // SDL window and ImGui display coordinates are already expressed in macOS
+    // points. Scaling them again from the panel's physical DPI makes the
+    // sidebar minimum heights exceed a Retina display's usable point height.
+    (void)display_index;
+    return 1.0f;
+#else
     float diagonal_dpi = 96.0f;
     float horizontal_dpi = 96.0f;
     float vertical_dpi = 96.0f;
@@ -106,6 +109,7 @@ float display_dpi_scale(int display_index)
     }
 
     return std::clamp(std::max(horizontal_dpi, vertical_dpi) / 96.0f, 1.0f, 3.0f);
+#endif
 }
 
 void update_telemetry_rows(std::vector<nxpc::host::TelemetrySample> &rows,
@@ -168,7 +172,7 @@ Options parse_args(int argc, char **argv)
         else if ((argument == "--help") || (argument == "-h"))
         {
             std::printf("NXP Cup native camera and telemetry viewer\n\n"
-                        "usage: nxpc_viewer.exe [--port COM34] [--baud 115200]\n"
+                        "usage: nxpc_viewer [--port <device>] [--baud 115200]\n"
                         "                      [--test-seconds N]\n\n"
                         "Without --port, exactly one VID_1FC9/PID_0094 device must be present.\n");
             std::exit(0);
@@ -617,18 +621,6 @@ const char *log_level_name(uint8_t level)
     }
 }
 
-void choose_firmware_image(std::array<char, 1024> &path)
-{
-    OPENFILENAMEA dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.lpstrFilter = "NXP Cup firmware image (*.bin)\0*.bin\0All files (*.*)\0*.*\0\0";
-    dialog.lpstrFile = path.data();
-    dialog.nMaxFile = static_cast<DWORD>(path.size());
-    dialog.lpstrTitle = "Select an NXP Cup firmware image";
-    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    (void)GetOpenFileNameA(&dialog);
-}
-
 std::string default_firmware_image_path()
 {
     namespace fs = std::filesystem;
@@ -646,12 +638,11 @@ std::string default_firmware_image_path()
         }
     }
 
-    std::array<char, 32768> executable_path{};
-    const DWORD path_length = GetModuleFileNameA(nullptr, executable_path.data(),
-                                                 static_cast<DWORD>(executable_path.size()));
-    if ((path_length > 0u) && (path_length < executable_path.size()))
+    std::string executable_error;
+    const fs::path executable_path = nxpc::host::current_executable_path(executable_error);
+    if (!executable_path.empty())
     {
-        fs::path directory = fs::path(executable_path.data()).parent_path();
+        fs::path directory = executable_path.parent_path();
         for (size_t level = 0u; level < 8u; ++level)
         {
             error.clear();
@@ -676,7 +667,9 @@ std::string default_firmware_image_path()
 int viewer_main(const Options &options)
 {
     SDL_SetMainReady();
+#if defined(_WIN32)
     (void)SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
         throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
@@ -716,12 +709,41 @@ int viewer_main(const Options &options)
         throw std::runtime_error("SDL_CreateRenderer failed: " + error);
     }
 
+    float font_rasterizer_density = 1.0f;
+#if defined(__APPLE__)
+    // The SDL_Renderer ImGui backend scales clip rectangles for Retina output,
+    // but SDL_RenderGeometryRaw coordinates only receive that same transform
+    // when the renderer scale is set. Keep ImGui layout in macOS points and
+    // let SDL apply the point-to-pixel transform to both geometry and clips.
+    int window_width = 0;
+    int window_height = 0;
+    int output_width = 0;
+    int output_height = 0;
+    SDL_GetWindowSize(window, &window_width, &window_height);
+    if ((SDL_GetRendererOutputSize(renderer, &output_width, &output_height) == 0) &&
+        (window_width > 0) && (window_height > 0))
+    {
+        const float renderer_scale_x = static_cast<float>(output_width) / window_width;
+        const float renderer_scale_y = static_cast<float>(output_height) / window_height;
+        if (SDL_RenderSetScale(renderer, renderer_scale_x, renderer_scale_y) != 0)
+        {
+            const std::string error = SDL_GetError();
+            SDL_DestroyRenderer(renderer);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            throw std::runtime_error("SDL_RenderSetScale failed: " + error);
+        }
+        font_rasterizer_density = std::max(renderer_scale_x, renderer_scale_y);
+    }
+#endif
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = nullptr;
     ImFontConfig font_config;
     font_config.SizePixels = kUiFontSizePixels * dpi_scale;
+    font_config.RasterizerDensity = font_rasterizer_density;
     io.Fonts->AddFontDefault(&font_config);
     ImGui::StyleColorsDark();
     ImGui::GetStyle().ScaleAllSizes((kUiFontSizePixels / kImGuiDefaultFontSizePixels) * dpi_scale);
@@ -999,7 +1021,17 @@ int viewer_main(const Options &options)
         }
         if (ImGui::Button("Browse...", ImVec2(browse_button_width, 0.0f)))
         {
-            choose_firmware_image(image_path);
+            std::string selected_path = image_path.data();
+            std::string dialog_error;
+            if (nxpc::host::choose_firmware_image(selected_path, dialog_error))
+            {
+                std::snprintf(image_path.data(), image_path.size(), "%s", selected_path.c_str());
+            }
+            else if (!dialog_error.empty())
+            {
+                std::lock_guard<std::mutex> lock(shared.mutex);
+                shared.program_error = dialog_error;
+            }
         }
         const bool enter_isp_supported =
             connected && ((hello.capability_flags & NXPC_DBG_CAPABILITY_ENTER_ISP) != 0u);

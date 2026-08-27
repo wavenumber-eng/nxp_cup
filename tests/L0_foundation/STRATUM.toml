@@ -56,3 +56,21 @@ test_valid_local_archive_installs_and_rerun_is_idempotent = "a valid local archi
 test_preseeded_verified_cache_installs_without_network = "a preseeded verified cache installs without reaching the network"
 test_outer_hash_mismatch_is_rejected_without_replacing_runtime = "an outer checksum mismatch cannot replace a known-good runtime"
 test_inner_hash_mismatch_is_rejected_and_known_good_is_restored = "an invalid manifest payload cannot replace a known-good runtime"
+
+[[subtests]]
+id = "L0_013"
+file = "test_L0_013_macos_setup_contract.py"
+name = "macOS setup contract"
+description = "The Apple Silicon bootstrap delegates safely to pinned shared setup behavior"
+test_case_type = "algorithmic"
+
+[subtests.code_under_test]
+module = "setup.sh"
+
+[subtests.test_functions]
+test_macos_arm_toolchain_pin_matches_the_official_release = "the Apple Silicon Arm archive and compiler hashes are immutable"
+test_shell_bootstrap_stays_thin_and_delegates_shared_setup = "setup.sh owns only prerequisite checks and delegation"
+test_shared_setup_has_mac_archive_and_package_manager_boundaries = "shared setup preserves verified extraction and native package-manager boundaries"
+test_shell_bootstrap_handles_a_repository_path_with_spaces = "the Mac bootstrap works from a checkout path containing spaces"
+test_bootstrap_recovers_the_standard_apple_silicon_homebrew_path = "the standard Homebrew prefix is recovered without profile edits"
+test_unpublished_mac_runtime_requires_an_explicit_skip = "setup cannot silently install or claim an unpinned Mac runtime"

@@ -7,7 +7,17 @@
     "archiveName": "arm-gnu-toolchain-14.2.rel1-mingw-w64-i686-arm-none-eabi.zip",
     "directoryName": "arm-gnu-toolchain-14.2.rel1-mingw-w64-i686-arm-none-eabi",
     "url": "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-mingw-w64-i686-arm-none-eabi.zip",
-    "sha256": "6facb152ce431ba9a4517e939ea46f057380f8f1e56b62e8712b3f3b87d994e1"
+    "sha256": "6facb152ce431ba9a4517e939ea46f057380f8f1e56b62e8712b3f3b87d994e1",
+    "macosArm64": {
+      "releaseVersion": "14.2.rel1",
+      "compilerVersion": "14.2.1",
+      "compilerSha256": "07bfe9e74cfe028af639bf38703b2259c608aedee6ff991752084a10b82da614",
+      "archiveName": "arm-gnu-toolchain-14.2.rel1-darwin-arm64-arm-none-eabi.tar.xz",
+      "directoryName": "arm-gnu-toolchain-14.2.rel1-darwin-arm64-arm-none-eabi",
+      "archiveFormat": "tar.xz",
+      "url": "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-darwin-arm64-arm-none-eabi.tar.xz",
+      "sha256": "c7c78ffab9bebfce91d99d3c24da6bf4b81c01e16cf551eb2ff9f25b9e0a3818"
+    }
   },
   "coreTools": {
     "releaseVersion": "1.0.1",
@@ -26,6 +36,15 @@
       "rblhost-LICENSE.txt",
       "SDL2.dll",
       "SDL2-LICENSE.txt"
-    ]
+    ],
+    "macosArm64": {
+      "available": false,
+      "reason": "The first immutable, Developer ID signed and notarized Mac release has not been published yet."
+    }
+  },
+  "requiredCommands": {
+    "cmakeMinimumVersion": "3.24.0",
+    "ninjaMinimumVersion": "1.10.0",
+    "powershellMinimumVersion": "7.4.0"
   }
 }

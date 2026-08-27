@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Provision the required Windows firmware tools and pinned prebuilt host runtime.
+    Provision the required firmware tools and pinned prebuilt host runtime.
 
 .DESCRIPTION
     The ordinary student setup installs and verifies:
 
       1. Arm GNU Toolchain 14.2.Rel1 under out\toolchains
-      2. CMake and Ninja through winget when they are not already usable
-      3. The exact Windows x64 core-tools GitHub release under out\artifacts\host
+      2. CMake and Ninja through the native package manager when needed
+      3. The exact platform core-tools GitHub release under out\artifacts\host
 
     Downloads are cached under out\downloads. A candidate toolchain or host runtime
     is fully verified before it replaces an existing installation. Nothing is added
@@ -21,6 +21,9 @@
     .\setup.ps1 -Force
     .\setup.ps1 -CoreToolsArchive D:\handoff\nxp-cup-core-tools-win-x64-1.0.1.zip
     .\setup.ps1 -IncludeMaintainerTools
+
+    On Apple Silicon macOS, run ./setup.sh. It installs PowerShell when needed
+    and delegates to this shared implementation.
 #>
 [CmdletBinding()]
 param(
@@ -38,6 +41,12 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.Net.Http
 
+$RunningOnMac = ($PSVersionTable.PSEdition -eq "Core") -and $IsMacOS
+$RunningOnWindows = -not $RunningOnMac -and ($env:OS -eq "Windows_NT")
+if (-not $RunningOnMac -and -not $RunningOnWindows) {
+    throw "NXP Cup setup supports Windows x64 and Apple Silicon macOS only."
+}
+
 $RepoRoot = $PSScriptRoot
 $OutDir = Join-Path $RepoRoot "out"
 $ToolsDir = Join-Path $OutDir "toolchains"
@@ -53,11 +62,27 @@ $Versions = Get-Content -LiteralPath $VersionsPath -Raw | ConvertFrom-Json
 if ($Versions.schemaVersion -ne 1) {
     throw "Unsupported setup definition schema: $($Versions.schemaVersion)"
 }
+if ($RunningOnMac -and
+    ($PSVersionTable.PSVersion -lt [version]$Versions.requiredCommands.powershellMinimumVersion)) {
+    throw "PowerShell $($Versions.requiredCommands.powershellMinimumVersion) or newer is required on macOS. Rerun ./setup.sh to install it with Homebrew."
+}
 
-$Arm = $Versions.armGnu
-$CoreTools = $Versions.coreTools
+$ArmFamily = $Versions.armGnu
+$CoreToolsFamily = $Versions.coreTools
+$Arm = if ($RunningOnMac) { $ArmFamily.macosArm64 } else { $ArmFamily }
+$CoreTools = if ($RunningOnMac) { $CoreToolsFamily.macosArm64 } else { $CoreToolsFamily }
+if ($RunningOnMac -and ($null -eq $Arm)) {
+    throw "The Apple Silicon Arm GNU toolchain pin is missing from setup.versions.json."
+}
+$CoreToolsAvailable = ($null -ne $CoreTools) -and ($CoreTools.available -ne $false)
 $ArmDir = Join-Path $ToolsDir $Arm.directoryName
-$ArmGcc = Join-Path $ArmDir "bin\arm-none-eabi-gcc.exe"
+$ExecutableSuffix = if ($RunningOnWindows) { ".exe" } else { "" }
+$ArmGcc = Join-Path (Join-Path $ArmDir "bin") "arm-none-eabi-gcc$ExecutableSuffix"
+$PathComparison = if ($RunningOnWindows) {
+    [System.StringComparison]::OrdinalIgnoreCase
+} else {
+    [System.StringComparison]::Ordinal
+}
 
 function Write-Header {
     param([Parameter(Mandatory = $true)][string]$Text)
@@ -79,8 +104,9 @@ function Remove-SetupPath {
         return
     }
     $fullPath = [System.IO.Path]::GetFullPath($LiteralPath)
-    $outPrefix = [System.IO.Path]::GetFullPath($OutDir).TrimEnd('\') + '\'
-    if (-not $fullPath.StartsWith($outPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $separator = [System.IO.Path]::DirectorySeparatorChar
+    $outPrefix = [System.IO.Path]::GetFullPath($OutDir).TrimEnd($separator) + $separator
+    if (-not $fullPath.StartsWith($outPrefix, $PathComparison)) {
         throw "Refusing to remove a setup path outside out: $fullPath"
     }
     Remove-Item -LiteralPath $fullPath -Recurse -Force
@@ -89,6 +115,21 @@ function Remove-SetupPath {
 function Get-Sha256 {
     param([Parameter(Mandatory = $true)][string]$LiteralPath)
     return (Get-FileHash -LiteralPath $LiteralPath -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-NormalizedRelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseDirectory,
+        [Parameter(Mandatory = $true)][string]$LiteralPath
+    )
+
+    $separator = [System.IO.Path]::DirectorySeparatorChar
+    $basePrefix = [System.IO.Path]::GetFullPath($BaseDirectory).TrimEnd($separator) + $separator
+    $fullPath = [System.IO.Path]::GetFullPath($LiteralPath)
+    if (-not $fullPath.StartsWith($basePrefix, $PathComparison)) {
+        throw "Path is outside the setup root: $fullPath"
+    }
+    return $fullPath.Substring($basePrefix.Length).Replace($separator, '/')
 }
 
 function Save-RemoteFile {
@@ -101,11 +142,16 @@ function Save-RemoteFile {
     [Net.ServicePointManager]::SecurityProtocol =
         [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $client = [System.Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromMinutes(30)
     $client.DefaultRequestHeaders.UserAgent.ParseAdd("nxp-cup-setup/1.0")
+    $cancellation = [System.Threading.CancellationTokenSource]::new(
+        [TimeSpan]::FromMinutes(30)
+    )
     try {
         $response = $client.GetAsync(
             $Url,
-            [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
+            [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead,
+            $cancellation.Token
         ).GetAwaiter().GetResult()
         [void]$response.EnsureSuccessStatusCode()
         $total = $response.Content.Headers.ContentLength
@@ -120,7 +166,9 @@ function Save-RemoteFile {
             $buffer = New-Object byte[] (1024 * 1024)
             [int64]$received = 0
             $lastReported = -10
-            while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            while (($read = $inputStream.ReadAsync(
+                    $buffer, 0, $buffer.Length, $cancellation.Token
+                ).GetAwaiter().GetResult()) -gt 0) {
                 $outputStream.Write($buffer, 0, $read)
                 $received += $read
                 if ($total -and ($total -gt 0)) {
@@ -140,6 +188,7 @@ function Save-RemoteFile {
         }
     } finally {
         if ($response) { $response.Dispose() }
+        $cancellation.Dispose()
         $client.Dispose()
     }
 }
@@ -208,7 +257,8 @@ function Expand-ZipStreaming {
     )
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-    $destinationPrefix = [System.IO.Path]::GetFullPath($Destination).TrimEnd('\') + '\'
+    $separator = [System.IO.Path]::DirectorySeparatorChar
+    $destinationPrefix = [System.IO.Path]::GetFullPath($Destination).TrimEnd($separator) + $separator
     $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
     try {
         $total = $archive.Entries.Count
@@ -217,8 +267,15 @@ function Expand-ZipStreaming {
         foreach ($entry in $archive.Entries) {
             $index++
             $target = [System.IO.Path]::GetFullPath((Join-Path $Destination $entry.FullName))
-            if (-not $target.StartsWith($destinationPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (-not $target.StartsWith($destinationPrefix, $PathComparison)) {
                 throw "Archive entry escapes the staging directory: $($entry.FullName)"
+            }
+            if ($RunningOnMac) {
+                $entryType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
+                if ($entryType -eq 0xA000) {
+                    throw "Archive contains an unsupported symbolic link: $($entry.FullName)"
+                }
+                continue
             }
             if ($entry.FullName.EndsWith("/")) {
                 New-Item -ItemType Directory -Path $target -Force | Out-Null
@@ -238,12 +295,41 @@ function Expand-ZipStreaming {
     } finally {
         $archive.Dispose()
     }
+    if ($RunningOnMac) {
+        & /usr/bin/ditto -x -k $ZipPath $Destination
+        if ($LASTEXITCODE -ne 0) {
+            throw "ditto could not extract $ZipPath (exit $LASTEXITCODE)"
+        }
+    }
+}
+
+function Expand-TarXz {
+    param(
+        [Parameter(Mandatory = $true)][string]$ArchivePath,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    $entries = @(& /usr/bin/tar -tJf $ArchivePath 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "tar could not inspect $ArchivePath (exit $LASTEXITCODE)"
+    }
+    foreach ($entry in $entries) {
+        $normalized = $entry.Replace('\', '/')
+        if ($normalized.StartsWith('/') -or ($normalized -match '(^|/)\.\.(/|$)')) {
+            throw "Archive entry escapes the staging directory: $entry"
+        }
+    }
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    & /usr/bin/tar -xJf $ArchivePath -C $Destination
+    if ($LASTEXITCODE -ne 0) {
+        throw "tar could not extract $ArchivePath (exit $LASTEXITCODE)"
+    }
 }
 
 function Test-ArmDirectory {
     param([Parameter(Mandatory = $true)][string]$Directory)
 
-    $compiler = Join-Path $Directory "bin\arm-none-eabi-gcc.exe"
+    $compiler = Join-Path (Join-Path $Directory "bin") "arm-none-eabi-gcc$ExecutableSuffix"
     if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
         return $false
     }
@@ -303,7 +389,11 @@ function Install-ArmToolchain {
     Remove-SetupPath -LiteralPath $candidate
     try {
         Write-Host "  Extracting the Arm toolchain (~13k files)..." -ForegroundColor White
-        Expand-ZipStreaming -ZipPath $archive -Destination $candidate
+        if ($RunningOnMac) {
+            Expand-TarXz -ArchivePath $archive -Destination $candidate
+        } else {
+            Expand-ZipStreaming -ZipPath $archive -Destination $candidate
+        }
         if (-not (Test-ArmDirectory -Directory $candidate)) {
             $inner = Get-ChildItem -LiteralPath $candidate -Directory |
                 Where-Object { Test-ArmDirectory -Directory $_.FullName } |
@@ -326,9 +416,59 @@ function Install-ArmToolchain {
 }
 
 function Update-SetupProcessPath {
+    if ($RunningOnMac) {
+        $brewPrefix = (& brew --prefix 2>&1 | Out-String).Trim()
+        if (($LASTEXITCODE -ne 0) -or [string]::IsNullOrWhiteSpace($brewPrefix)) {
+            throw "Homebrew is present but its installation prefix could not be resolved."
+        }
+        $env:PATH = @((Join-Path $brewPrefix "bin"), (Join-Path $brewPrefix "sbin"),
+            $env:PATH) -join [System.IO.Path]::PathSeparator
+        return
+    }
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = @($machinePath, $userPath, $env:Path) -join ";"
+}
+
+function Install-ViaHomebrew {
+    param(
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][string]$Formula,
+        [Parameter(Mandatory = $true)][string]$ProbeCommand,
+        [switch]$Required
+    )
+
+    if (Test-OnPath -Name $ProbeCommand) {
+        Write-Host "  [SKIP] Already on PATH" -ForegroundColor DarkGray
+        return $true
+    }
+    if (-not (Test-OnPath -Name "brew")) {
+        if ($Required) {
+            throw "Homebrew is unavailable and required command '$ProbeCommand' was not found. Run ./setup.sh after installing Homebrew from https://brew.sh."
+        }
+        Write-Warning "Homebrew is unavailable; optional $DisplayName was not installed."
+        return $false
+    }
+
+    Write-Host "  Installing $DisplayName with Homebrew..." -ForegroundColor White
+    & brew install --formula $Formula
+    if ($LASTEXITCODE -ne 0) {
+        if ($Required) {
+            throw "Homebrew could not install required $DisplayName (exit $LASTEXITCODE)."
+        }
+        Write-Warning "Homebrew could not install optional $DisplayName (exit $LASTEXITCODE)."
+        return $false
+    }
+    Update-SetupProcessPath
+    if (-not (Test-OnPath -Name $ProbeCommand)) {
+        if ($Required) {
+            throw "$DisplayName installation completed, but '$ProbeCommand' is still unavailable. Open a new terminal and rerun ./setup.sh."
+        }
+        Write-Warning "$DisplayName installed, but '$ProbeCommand' is not visible in this process."
+        return $false
+    }
+    Write-Host "  [OK] Installed $DisplayName" -ForegroundColor Green
+    return $true
 }
 
 function Install-ViaWinget {
@@ -377,6 +517,7 @@ function Assert-UsableCommand {
     param(
         [Parameter(Mandatory = $true)][string]$DisplayName,
         [Parameter(Mandatory = $true)][string]$Command,
+        [version]$MinimumVersion,
         [string[]]$Arguments = @("--version")
     )
 
@@ -388,7 +529,15 @@ function Assert-UsableCommand {
     if ($LASTEXITCODE -ne 0) {
         throw "Required command '$Command' failed its version check: $output"
     }
-    Write-Host "  [OK] $(($output -split "`r?`n")[0])" -ForegroundColor Green
+    $firstLine = ($output -split "`r?`n")[0].Trim()
+    if ($MinimumVersion) {
+        $versionMatch = [regex]::Match($firstLine, '\d+(?:\.\d+){1,3}')
+        if ((-not $versionMatch.Success) -or
+            ([version]$versionMatch.Value -lt $MinimumVersion)) {
+            throw "$DisplayName $MinimumVersion or newer is required; found '$firstLine'."
+        }
+    }
+    Write-Host "  [OK] $firstLine" -ForegroundColor Green
 }
 
 function Test-CoreToolsDirectory {
@@ -402,13 +551,24 @@ function Test-CoreToolsDirectory {
         throw "manifest.json is missing"
     }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if (($manifest.schemaVersion -ne 1) -or
+    $expectedSchema = if ($RunningOnMac) { 2 } else { 1 }
+    $expectedPlatform = if ($RunningOnMac) { "macos" } else { "windows" }
+    $expectedArchitecture = if ($RunningOnMac) { "arm64" } else { "x64" }
+    if (($manifest.schemaVersion -ne $expectedSchema) -or
         ($manifest.releaseVersion -ne $CoreTools.releaseVersion) -or
         ($manifest.sourceCommit -ne $CoreTools.sourceCommit) -or
         ($manifest.sourceDirty -ne $false) -or
-        ($manifest.platform -ne "windows") -or
-        ($manifest.architecture -ne "x64")) {
-        throw "manifest.json does not identify the pinned clean Windows x64 release"
+        ($manifest.platform -ne $expectedPlatform) -or
+        ($manifest.architecture -ne $expectedArchitecture)) {
+        throw "manifest.json does not identify the pinned clean $expectedPlatform $expectedArchitecture release"
+    }
+    if ($RunningOnMac -and
+        (($manifest.minimumOsVersion -ne "13.0") -or
+         ($manifest.bundleIdentifier -ne "com.wavenumber.nxpc.viewer") -or
+         ($manifest.signing.state -ne "developer-id") -or
+         (-not $manifest.signing.hardenedRuntime) -or
+         (-not $manifest.signing.notarized))) {
+        throw "manifest.json does not identify a signed and notarized macOS 13 app"
     }
 
     $expectedNames = @($CoreTools.payloadFiles | Sort-Object)
@@ -428,30 +588,73 @@ function Test-CoreToolsDirectory {
         }
     }
 
-    $allowedTopFiles = @($expectedNames) + "manifest.json"
-    $unexpected = @(Get-ChildItem -LiteralPath $Directory -File |
-        Where-Object { $_.Name -notin $allowedTopFiles })
-    if ($unexpected.Count -gt 0) {
-        throw "unexpected runtime file $($unexpected[0].Name)"
+    $actualNames = @(
+        Get-ChildItem -LiteralPath $Directory -File -Recurse |
+            ForEach-Object {
+                Get-NormalizedRelativePath -BaseDirectory $Directory `
+                    -LiteralPath $_.FullName
+            } |
+            Where-Object {
+                ($_ -ne "manifest.json") -and
+                ((($_ -split '/', 2)[0]) -notin $AllowedDirectories)
+            } |
+            Sort-Object
+    )
+    if (($actualNames -join "`n") -ne ($expectedNames -join "`n")) {
+        throw "installed runtime files do not match the pinned release contract"
     }
+    $expectedTopDirectories = @($expectedNames | Where-Object { $_ -like "*/*" } |
+        ForEach-Object { ($_ -split '/', 2)[0] } | Sort-Object -Unique)
     $unexpectedDirectories = @(Get-ChildItem -LiteralPath $Directory -Directory |
-        Where-Object { $_.Name -notin $AllowedDirectories })
+        Where-Object { ($_.Name -notin $AllowedDirectories) -and
+            ($_.Name -notin $expectedTopDirectories) })
     if ($unexpectedDirectories.Count -gt 0) {
         throw "unexpected runtime directory $($unexpectedDirectories[0].Name)"
     }
 
-    $tool = Join-Path $Directory "nxpc_tool.exe"
+    $toolName = if ($RunningOnMac) { "nxpc_tool" } else { "nxpc_tool.exe" }
+    $tool = Join-Path $Directory $toolName
     $selfTestArguments = @($CoreTools.selfTestArguments)
     if ($selfTestArguments.Count -eq 0) {
         throw "Pinned core-tools self-test arguments are missing"
     }
     & $tool @selfTestArguments
     if ($LASTEXITCODE -ne 0) {
-        throw "nxpc_tool.exe selftest failed with exit code $LASTEXITCODE"
+        throw "$toolName selftest failed with exit code $LASTEXITCODE"
+    }
+    if ($RunningOnMac) {
+        $app = Join-Path $Directory "NXP Cup Viewer.app"
+        foreach ($executable in @(
+            $tool,
+            (Join-Path $Directory "rblhost"),
+            (Join-Path $app "Contents/MacOS/NXP Cup Viewer"),
+            (Join-Path $app "Contents/Resources/bin/rblhost")
+        )) {
+            $mode = [System.IO.File]::GetUnixFileMode($executable)
+            if (($mode -band [System.IO.UnixFileMode]::UserExecute) -eq 0) {
+                throw "executable mode is missing on $executable"
+            }
+        }
+        & codesign --verify --deep --strict --verbose=2 $app
+        if ($LASTEXITCODE -ne 0) {
+            throw "NXP Cup Viewer.app signature validation failed with exit code $LASTEXITCODE"
+        }
+        & xcrun stapler validate $app
+        if ($LASTEXITCODE -ne 0) {
+            throw "NXP Cup Viewer.app does not have a valid stapled notarization ticket"
+        }
     }
 }
 
 function Install-CoreTools {
+    if (-not $CoreToolsAvailable) {
+        $reason = if (($null -ne $CoreTools) -and $CoreTools.reason) {
+            $CoreTools.reason
+        } else {
+            "No immutable release is pinned for this platform."
+        }
+        throw "$reason Use -SkipCoreTools until the release pin is finalized."
+    }
     if ((-not $Force) -and (Test-Path -LiteralPath $HostDir -PathType Container)) {
         try {
             Test-CoreToolsDirectory -Directory $HostDir -AllowedDirectories @("packages")
@@ -482,10 +685,17 @@ function Install-CoreTools {
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {
-    throw "The pinned NXP Cup host runtime requires 64-bit Windows."
+    throw "The pinned NXP Cup tools require a 64-bit operating system."
+}
+if ($RunningOnMac) {
+    $machineArchitecture = (& /usr/bin/uname -m 2>&1 | Out-String).Trim()
+    if (($LASTEXITCODE -ne 0) -or ($machineArchitecture -ne "arm64")) {
+        throw "The first NXP Cup Mac setup supports Apple Silicon arm64 only."
+    }
 }
 
-Write-Header -Text "NXP Cup Windows Setup"
+$platformDisplayName = if ($RunningOnMac) { "Apple Silicon macOS" } else { "Windows x64" }
+Write-Header -Text "NXP Cup $platformDisplayName Setup"
 Write-Host "  Repository: $RepoRoot" -ForegroundColor DarkGray
 Write-Host "  Pins:       $VersionsPath" -ForegroundColor DarkGray
 Write-Host "  Cache:      $DownloadsDir" -ForegroundColor DarkGray
@@ -503,9 +713,15 @@ Write-Host "[2/4] CMake" -ForegroundColor Yellow
 if ($SkipCMake) {
     Write-Host "  [SKIP] -SkipCMake" -ForegroundColor DarkGray
 } else {
-    [void](Install-ViaWinget -DisplayName "CMake" -WingetId "Kitware.CMake" `
-        -ProbeCommand "cmake" -Required)
-    Assert-UsableCommand -DisplayName "CMake" -Command "cmake"
+    if ($RunningOnMac) {
+        [void](Install-ViaHomebrew -DisplayName "CMake" -Formula "cmake" `
+            -ProbeCommand "cmake" -Required)
+    } else {
+        [void](Install-ViaWinget -DisplayName "CMake" -WingetId "Kitware.CMake" `
+            -ProbeCommand "cmake" -Required)
+    }
+    Assert-UsableCommand -DisplayName "CMake" -Command "cmake" `
+        -MinimumVersion $Versions.requiredCommands.cmakeMinimumVersion
 }
 
 Write-Host ""
@@ -513,13 +729,24 @@ Write-Host "[3/4] Ninja" -ForegroundColor Yellow
 if ($SkipNinja) {
     Write-Host "  [SKIP] -SkipNinja" -ForegroundColor DarkGray
 } else {
-    [void](Install-ViaWinget -DisplayName "Ninja" -WingetId "Ninja-build.Ninja" `
-        -ProbeCommand "ninja" -Required)
-    Assert-UsableCommand -DisplayName "Ninja" -Command "ninja"
+    if ($RunningOnMac) {
+        [void](Install-ViaHomebrew -DisplayName "Ninja" -Formula "ninja" `
+            -ProbeCommand "ninja" -Required)
+    } else {
+        [void](Install-ViaWinget -DisplayName "Ninja" -WingetId "Ninja-build.Ninja" `
+            -ProbeCommand "ninja" -Required)
+    }
+    Assert-UsableCommand -DisplayName "Ninja" -Command "ninja" `
+        -MinimumVersion $Versions.requiredCommands.ninjaMinimumVersion
 }
 
 Write-Host ""
-Write-Host "[4/4] Pinned Windows core tools $($CoreTools.releaseVersion)" -ForegroundColor Yellow
+$coreToolsLabel = if ($CoreToolsAvailable) {
+    "Pinned $platformDisplayName core tools $($CoreTools.releaseVersion)"
+} else {
+    "$platformDisplayName core tools (release pin pending)"
+}
+Write-Host "[4/4] $coreToolsLabel" -ForegroundColor Yellow
 if ($SkipCoreTools) {
     Write-Host "  [SKIP] -SkipCoreTools" -ForegroundColor DarkGray
 } else {
@@ -528,10 +755,16 @@ if ($SkipCoreTools) {
 
 if ($IncludeMaintainerTools) {
     Write-Host ""
-    Write-Host "[Maintainer] uv and LLVM-MinGW" -ForegroundColor Yellow
-    [void](Install-ViaWinget -DisplayName "uv" -WingetId "astral-sh.uv" -ProbeCommand "uv")
-    [void](Install-ViaWinget -DisplayName "LLVM-MinGW" `
-        -WingetId "MartinStorsjo.LLVM-MinGW.UCRT" -ProbeCommand "clang++")
+    if ($RunningOnMac) {
+        Write-Host "[Maintainer] uv and AppleClang" -ForegroundColor Yellow
+        [void](Install-ViaHomebrew -DisplayName "uv" -Formula "uv" -ProbeCommand "uv")
+        Assert-UsableCommand -DisplayName "Xcode Command Line Tools" -Command "clang++"
+    } else {
+        Write-Host "[Maintainer] uv and LLVM-MinGW" -ForegroundColor Yellow
+        [void](Install-ViaWinget -DisplayName "uv" -WingetId "astral-sh.uv" -ProbeCommand "uv")
+        [void](Install-ViaWinget -DisplayName "LLVM-MinGW" `
+            -WingetId "MartinStorsjo.LLVM-MinGW.UCRT" -ProbeCommand "clang++")
+    }
 }
 
 Write-Header -Text "Setup Complete"
@@ -544,7 +777,13 @@ if (-not $SkipCoreTools) {
 Write-Host "  No persistent environment variables were changed." -ForegroundColor White
 Write-Host ""
 Write-Host "  Next:" -ForegroundColor White
-Write-Host "    .\src\embedded\build.ps1" -ForegroundColor Green
-Write-Host "    .\src\embedded\flash.ps1" -ForegroundColor Green
-Write-Host "    .\out\artifacts\host\nxpc_viewer.exe" -ForegroundColor Green
+if ($RunningOnMac) {
+    Write-Host "    pwsh -File src/embedded/build.ps1" -ForegroundColor Green
+    Write-Host "    pwsh -File src/embedded/flash.ps1" -ForegroundColor Green
+    Write-Host "    open 'out/artifacts/host/NXP Cup Viewer.app'" -ForegroundColor Green
+} else {
+    Write-Host "    .\src\embedded\build.ps1" -ForegroundColor Green
+    Write-Host "    .\src\embedded\flash.ps1" -ForegroundColor Green
+    Write-Host "    .\out\artifacts\host\nxpc_viewer.exe" -ForegroundColor Green
+}
 Write-Host ""

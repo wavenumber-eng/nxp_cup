@@ -33,6 +33,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$runningOnMac = ($PSVersionTable.PSEdition -eq "Core") -and $IsMacOS
 . (Join-Path $PSScriptRoot "tools\lib\nxpc_image_common.ps1")
 
 $automaticBackend = [string]::IsNullOrWhiteSpace($Backend)
@@ -54,58 +55,92 @@ function Resolve-JLinkCommander {
         return (Resolve-Path -LiteralPath $requestedPath).Path
     }
 
-    $programFilesRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Select-Object -Unique
+    if ($runningOnMac) {
+        $seggerRoot = "/Applications/SEGGER"
+        if (Test-Path -LiteralPath $seggerRoot -PathType Container) {
+            $unversioned = Join-Path $seggerRoot "JLink/JLinkExe"
+            if (Test-Path -LiteralPath $unversioned -PathType Leaf) {
+                return (Resolve-Path -LiteralPath $unversioned).Path
+            }
 
-    foreach ($programFilesRoot in $programFilesRoots) {
-        $seggerRoot = Join-Path $programFilesRoot "SEGGER"
-        if (-not (Test-Path -LiteralPath $seggerRoot -PathType Container)) {
-            continue
-        }
-
-        $unversioned = Join-Path $seggerRoot "JLink\JLink.exe"
-        if (Test-Path -LiteralPath $unversioned -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $unversioned).Path
-        }
-
-        $versioned = Get-ChildItem -LiteralPath $seggerRoot -Directory -Filter "JLink_V*" |
-            Sort-Object -Property @{
-                Expression = {
-                    if ($_.Name -match '^JLink_V(?<VersionDigits>[0-9]+)') {
-                        [int64]$Matches.VersionDigits
-                    } else {
-                        0
+            $versioned = Get-ChildItem -LiteralPath $seggerRoot -Directory -Filter "JLink_V*" |
+                Sort-Object -Property @{
+                    Expression = {
+                        if ($_.Name -match '^JLink_V(?<VersionDigits>[0-9]+)') {
+                            [int64]$Matches.VersionDigits
+                        } else {
+                            0
+                        }
                     }
-                }
-                Descending = $true
-            } |
-            ForEach-Object { Join-Path $_.FullName "JLink.exe" } |
-            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+                    Descending = $true
+                } |
+                ForEach-Object { Join-Path $_.FullName "JLinkExe" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+                Select-Object -First 1
+            if ($versioned) {
+                return (Resolve-Path -LiteralPath $versioned).Path
+            }
+        }
+
+        $seggerOnPath = Get-Command JLinkExe -ErrorAction SilentlyContinue |
             Select-Object -First 1
+        if ($seggerOnPath) {
+            return $seggerOnPath.Source
+        }
+    } else {
+        $programFilesRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique
 
-        if ($versioned) {
-            return (Resolve-Path -LiteralPath $versioned).Path
+        foreach ($programFilesRoot in $programFilesRoots) {
+            $seggerRoot = Join-Path $programFilesRoot "SEGGER"
+            if (-not (Test-Path -LiteralPath $seggerRoot -PathType Container)) {
+                continue
+            }
+
+            $unversioned = Join-Path $seggerRoot "JLink\JLink.exe"
+            if (Test-Path -LiteralPath $unversioned -PathType Leaf) {
+                return (Resolve-Path -LiteralPath $unversioned).Path
+            }
+
+            $versioned = Get-ChildItem -LiteralPath $seggerRoot -Directory -Filter "JLink_V*" |
+                Sort-Object -Property @{
+                    Expression = {
+                        if ($_.Name -match '^JLink_V(?<VersionDigits>[0-9]+)') {
+                            [int64]$Matches.VersionDigits
+                        } else {
+                            0
+                        }
+                    }
+                    Descending = $true
+                } |
+                ForEach-Object { Join-Path $_.FullName "JLink.exe" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+                Select-Object -First 1
+
+            if ($versioned) {
+                return (Resolve-Path -LiteralPath $versioned).Path
+            }
+
+            $rootCandidate = Join-Path $seggerRoot "JLink.exe"
+            if (Test-Path -LiteralPath $rootCandidate -PathType Leaf) {
+                return (Resolve-Path -LiteralPath $rootCandidate).Path
+            }
         }
 
-        $rootCandidate = Join-Path $seggerRoot "JLink.exe"
-        if (Test-Path -LiteralPath $rootCandidate -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $rootCandidate).Path
+        $seggerOnPath = Get-Command JLink.exe -All -ErrorAction SilentlyContinue |
+            Where-Object { $_.Source -match '(?i)[\\/]SEGGER[\\/]' } |
+            Select-Object -First 1
+        if ($seggerOnPath) {
+            return $seggerOnPath.Source
         }
-    }
-
-    $seggerOnPath = Get-Command JLink.exe -All -ErrorAction SilentlyContinue |
-        Where-Object { $_.Source -match '(?i)[\\/]SEGGER[\\/]' } |
-        Select-Object -First 1
-    if ($seggerOnPath) {
-        return $seggerOnPath.Source
     }
 
     throw @"
 J-Link Commander was not found.
 
 Install the SEGGER J-Link Software and Documentation Pack, pass
--JLinkPath <path-to-JLink.exe>, or set NXPC_JLINK_PATH.
+-JLinkPath <path-to-J-Link-Commander>, or set NXPC_JLINK_PATH.
 "@
 }
 
@@ -127,7 +162,8 @@ if (($Backend -eq "Rom") -or $automaticBackend) {
         Write-Warning "$message Falling back to J-Link Commander."
     }
 
-    $hostTool = Join-Path $repoRoot "out\artifacts\host\nxpc_tool.exe"
+    $hostToolName = if ($runningOnMac) { "nxpc_tool" } else { "nxpc_tool.exe" }
+    $hostTool = Join-Path $repoRoot "out\artifacts\host\$hostToolName"
     if ((Test-Path -LiteralPath $binFile) -and -not (Test-Path -LiteralPath $hostTool)) {
         $message = "NXP Cup host tool not found. Run .\src\host\build.ps1 first."
         if (-not $automaticBackend) {
@@ -186,7 +222,7 @@ Write-Host "Size: $($fileInfo.Length) bytes"
 Write-Host "Modified: $($fileInfo.LastWriteTime)"
 Write-Host ""
 
-$cmdFile = Join-Path $env:TEMP "jlink_flash_nxpc.jlink"
+$cmdFile = Join-Path ([IO.Path]::GetTempPath()) "jlink_flash_nxpc.jlink"
 $postLoadCommands = if ($NoReset) {
     @()
 } else {

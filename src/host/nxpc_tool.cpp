@@ -29,14 +29,19 @@ struct Options
 
 void usage()
 {
+#if defined(_WIN32)
+    constexpr const char *tool_name = "nxpc_tool.exe";
+#else
+    constexpr const char *tool_name = "nxpc_tool";
+#endif
     std::cout
         << "NXP Cup one-cable host protocol probe\n\n"
         << "usage:\n"
-        << "  nxpc_tool.exe devices\n"
-        << "  nxpc_tool.exe selftest\n"
-        << "  nxpc_tool.exe probe [--port COM34] [--frame] [--seconds 2]\n"
-        << "  nxpc_tool.exe enter-isp [--port COM34]\n\n"
-        << "  nxpc_tool.exe program --image <nxp_cup_core0.bin> [--port COM34]\n"
+        << "  " << tool_name << " devices\n"
+        << "  " << tool_name << " selftest\n"
+        << "  " << tool_name << " probe [--port <device>] [--frame] [--seconds 2]\n"
+        << "  " << tool_name << " enter-isp [--port <device>]\n\n"
+        << "  " << tool_name << " program --image <nxp_cup_core0.bin> [--port <device>]\n"
         << "                       [--programmer <path>]\n\n"
         << "probe auto-selects only when exactly one VID_1FC9/PID_0094 CDC device is present.\n";
 }

@@ -1,17 +1,31 @@
-#define NOMINMAX
-
 #include "nxpc_programmer.hpp"
 
 #include "nxpc_host_core.hpp"
 
+#if defined(_WIN32)
+#define NOMINMAX
 #include <windows.h>
 #include <bcrypt.h>
+#elif defined(__APPLE__)
+#include <CommonCrypto/CommonDigest.h>
+#include <crt_externs.h>
+#include <mach-o/dyld.h>
+#include <cerrno>
+#include <csignal>
+#include <fcntl.h>
+#include <poll.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#else
+#error "nxpc_programmer supports Windows and macOS only"
+#endif
 
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
-#include <cwctype>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -30,10 +44,11 @@ constexpr size_t kMaximumProcessOutputBytes = 1024u * 1024u;
 
 struct ProcessResult
 {
-    DWORD exit_code = 0u;
+    uint32_t exit_code = 0u;
     std::string output;
 };
 
+#if defined(_WIN32)
 std::wstring widen(const std::string &text)
 {
     if (text.empty())
@@ -218,6 +233,245 @@ bool run_process(const std::string &application, const std::vector<std::string> 
     }
     return true;
 }
+#elif defined(__APPLE__)
+bool append_process_output(int fd, std::string &output, bool &at_eof, std::string &error)
+{
+    for (;;)
+    {
+        std::array<char, 4096> buffer{};
+        const ssize_t received = ::read(fd, buffer.data(), buffer.size());
+        if (received > 0)
+        {
+            if (output.size() < kMaximumProcessOutputBytes)
+            {
+                const size_t retained = std::min<size_t>(
+                    static_cast<size_t>(received), kMaximumProcessOutputBytes - output.size());
+                output.append(buffer.data(), retained);
+            }
+            continue;
+        }
+        if (received == 0)
+        {
+            at_eof = true;
+            return true;
+        }
+        if (errno == EINTR)
+        {
+            continue;
+        }
+        if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
+        {
+            return true;
+        }
+        error = "read process output failed: " + std::string(std::strerror(errno));
+        return false;
+    }
+}
+
+bool run_process(const std::string &application, const std::vector<std::string> &arguments,
+                 uint32_t timeout_ms, ProcessResult &result, std::string &error)
+{
+    int output_pipe[2] = {-1, -1};
+    if (pipe(output_pipe) != 0)
+    {
+        error = "pipe failed: " + std::string(std::strerror(errno));
+        return false;
+    }
+    const int flags = fcntl(output_pipe[0], F_GETFL, 0);
+    if ((flags < 0) || (fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK) != 0))
+    {
+        error = "fcntl failed: " + std::string(std::strerror(errno));
+        ::close(output_pipe[0]);
+        ::close(output_pipe[1]);
+        return false;
+    }
+
+    posix_spawn_file_actions_t actions{};
+    if ((posix_spawn_file_actions_init(&actions) != 0) ||
+        (posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDOUT_FILENO) != 0) ||
+        (posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDERR_FILENO) != 0) ||
+        (posix_spawn_file_actions_addclose(&actions, output_pipe[0]) != 0) ||
+        (posix_spawn_file_actions_addclose(&actions, output_pipe[1]) != 0))
+    {
+        posix_spawn_file_actions_destroy(&actions);
+        ::close(output_pipe[0]);
+        ::close(output_pipe[1]);
+        error = "posix_spawn file action setup failed";
+        return false;
+    }
+
+    std::vector<char *> argv;
+    argv.reserve(arguments.size() + 2u);
+    argv.push_back(const_cast<char *>(application.c_str()));
+    for (const std::string &argument : arguments)
+    {
+        argv.push_back(const_cast<char *>(argument.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    pid_t process = -1;
+    const int spawn_status = posix_spawn(&process, application.c_str(), &actions, nullptr,
+                                         argv.data(), *_NSGetEnviron());
+    posix_spawn_file_actions_destroy(&actions);
+    ::close(output_pipe[1]);
+    if (spawn_status != 0)
+    {
+        ::close(output_pipe[0]);
+        error = "posix_spawn failed for " + application + ": " + std::strerror(spawn_status);
+        return false;
+    }
+
+    result.output.clear();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    bool timed_out = false;
+    bool output_eof = false;
+    int wait_status = 0;
+    for (;;)
+    {
+        if (!append_process_output(output_pipe[0], result.output, output_eof, error))
+        {
+            (void)kill(process, SIGKILL);
+            (void)waitpid(process, &wait_status, 0);
+            ::close(output_pipe[0]);
+            return false;
+        }
+        const pid_t waited = waitpid(process, &wait_status, WNOHANG);
+        if (waited == process)
+        {
+            break;
+        }
+        if ((waited < 0) && (errno != EINTR))
+        {
+            error = "waitpid failed: " + std::string(std::strerror(errno));
+            (void)kill(process, SIGKILL);
+            (void)waitpid(process, &wait_status, 0);
+            ::close(output_pipe[0]);
+            return false;
+        }
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            timed_out = true;
+            (void)kill(process, SIGKILL);
+            (void)waitpid(process, &wait_status, 0);
+            break;
+        }
+        pollfd descriptor{output_pipe[0], POLLIN, 0};
+        (void)poll(&descriptor, 1u, 10);
+    }
+    if (!output_eof)
+    {
+        (void)append_process_output(output_pipe[0], result.output, output_eof, error);
+    }
+    ::close(output_pipe[0]);
+
+    if (WIFEXITED(wait_status))
+    {
+        result.exit_code = static_cast<uint32_t>(WEXITSTATUS(wait_status));
+    }
+    else if (WIFSIGNALED(wait_status))
+    {
+        result.exit_code = static_cast<uint32_t>(128 + WTERMSIG(wait_status));
+    }
+    else
+    {
+        result.exit_code = 1u;
+    }
+    if (timed_out)
+    {
+        error = "process timed out after " + std::to_string(timeout_ms) + " ms";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+#endif
+
+std::string path_utf8(const std::filesystem::path &path)
+{
+#if defined(_WIN32)
+    return narrow(path.wstring());
+#elif defined(__APPLE__)
+    return path.u8string();
+#endif
+}
+
+std::filesystem::path executable_path()
+{
+#if defined(_WIN32)
+    std::array<wchar_t, 32768> executable{};
+    const DWORD length =
+        GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    if ((length == 0u) || (length >= executable.size()))
+    {
+        return {};
+    }
+    return std::filesystem::path(executable.data());
+#elif defined(__APPLE__)
+    uint32_t size = 0u;
+    (void)_NSGetExecutablePath(nullptr, &size);
+    std::vector<char> buffer(size);
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0)
+    {
+        return {};
+    }
+    std::error_code error;
+    return std::filesystem::weakly_canonical(std::filesystem::u8path(buffer.data()), error);
+#endif
+}
+
+void add_environment_candidate(const char *name, std::vector<std::filesystem::path> &candidates)
+{
+#if defined(_WIN32)
+    char *environment_path = nullptr;
+    size_t environment_bytes = 0u;
+    if ((_dupenv_s(&environment_path, &environment_bytes, name) == 0) &&
+        (environment_path != nullptr) && (environment_path[0] != '\0'))
+    {
+        candidates.push_back(std::filesystem::u8path(environment_path));
+    }
+    std::free(environment_path);
+#elif defined(__APPLE__)
+    const char *environment_path = std::getenv(name);
+    if ((environment_path != nullptr) && (environment_path[0] != '\0'))
+    {
+        candidates.push_back(std::filesystem::u8path(environment_path));
+    }
+#endif
+}
+
+std::filesystem::path temporary_readback_path(std::string &error)
+{
+    std::error_code filesystem_error;
+    const std::filesystem::path directory = std::filesystem::temp_directory_path(filesystem_error);
+    if (filesystem_error || directory.empty())
+    {
+        error = "cannot resolve a temporary directory for flash readback";
+        return {};
+    }
+
+#if defined(_WIN32)
+    const uint64_t process_id = GetCurrentProcessId();
+#elif defined(__APPLE__)
+    const uint64_t process_id = static_cast<uint64_t>(getpid());
+#endif
+    const uint64_t timestamp =
+        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::filesystem::path path =
+        directory / ("nxp-cup-rblhost-readback-" + std::to_string(process_id) + "-" +
+                     std::to_string(timestamp) + ".bin");
+    if (std::filesystem::exists(path, filesystem_error))
+    {
+        error = "temporary flash readback path already exists";
+        return {};
+    }
+    if (filesystem_error)
+    {
+        error = "cannot inspect temporary flash readback path";
+        return {};
+    }
+    error.clear();
+    return path;
+}
 
 bool blhost_result_ok(const ProcessResult &result)
 {
@@ -272,6 +526,7 @@ std::string summarize_failure(const std::string &operation, const ProcessResult 
 
 bool sha256_file(const std::filesystem::path &path, std::string &digest, std::string &error)
 {
+#if defined(_WIN32)
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
     DWORD object_bytes = 0u;
@@ -347,6 +602,49 @@ cleanup:
         (void)BCryptCloseAlgorithmProvider(algorithm, 0u);
     }
     return ok;
+#elif defined(__APPLE__)
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+    {
+        error = "cannot open firmware image for SHA-256";
+        return false;
+    }
+
+    CC_SHA256_CTX context{};
+    if (CC_SHA256_Init(&context) != 1)
+    {
+        error = "CC_SHA256_Init failed";
+        return false;
+    }
+    std::array<char, 64u * 1024u> buffer{};
+    while (input)
+    {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = input.gcount();
+        if ((count > 0) &&
+            (CC_SHA256_Update(&context, buffer.data(), static_cast<CC_LONG>(count)) != 1))
+        {
+            error = "CC_SHA256_Update failed";
+            return false;
+        }
+    }
+    std::array<unsigned char, CC_SHA256_DIGEST_LENGTH> output{};
+    if (CC_SHA256_Final(output.data(), &context) != 1)
+    {
+        error = "CC_SHA256_Final failed";
+        return false;
+    }
+
+    std::ostringstream text;
+    text << std::uppercase << std::hex << std::setfill('0');
+    for (const uint8_t byte : output)
+    {
+        text << std::setw(2) << static_cast<unsigned>(byte);
+    }
+    digest = text.str();
+    error.clear();
+    return true;
+#endif
 }
 
 bool run_blhost_stage(const std::string &blhost, const std::vector<std::string> &arguments,
@@ -431,25 +729,18 @@ bool program_rom_with_rblhost(const std::string &rblhost_path, const FirmwareIma
         return false;
     }
 
-    std::array<wchar_t, 32768> temporary_directory{};
-    const DWORD temporary_length =
-        GetTempPathW(static_cast<DWORD>(temporary_directory.size()), temporary_directory.data());
-    if ((temporary_length == 0u) || (temporary_length >= temporary_directory.size()))
+    const std::filesystem::path readback = temporary_readback_path(error);
+    if (readback.empty())
     {
-        error = "cannot resolve a temporary directory for flash readback";
         return false;
     }
-    const std::filesystem::path readback =
-        std::filesystem::path(temporary_directory.data()) /
-        (L"nxp-cup-rblhost-readback-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-         std::to_wstring(GetTickCount64()) + L".bin");
     if (progress)
     {
         progress(ProgramStage::verify, "full flash readback");
     }
     const bool read_ok = run_rblhost_stage(
         rblhost_path,
-        arguments({"read-memory", "0x0", std::to_string(image.bytes), narrow(readback.wstring())}),
+        arguments({"read-memory", "0x0", std::to_string(image.bytes), path_utf8(readback)}),
         120000u, "flash readback", output, error);
     if (!read_ok)
     {
@@ -555,10 +846,10 @@ bool validate_firmware_image(const std::string &requested_path, FirmwareImage &i
         error = "firmware image size must be between 8 bytes and 1 MiB";
         return false;
     }
-    std::wstring extension = path.extension().wstring();
+    std::string extension = path.extension().u8string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
-    if (extension != L".bin")
+                   [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    if (extension != ".bin")
     {
         error = "ROM programmer requires a .bin image";
         return false;
@@ -590,7 +881,7 @@ bool validate_firmware_image(const std::string &requested_path, FirmwareImage &i
         return false;
     }
 
-    image.path = narrow(path.wstring());
+    image.path = path_utf8(path);
     image.bytes = bytes;
     image.initial_sp = initial_sp;
     image.reset_pc = reset_pc;
@@ -611,32 +902,25 @@ bool resolve_programmer(const std::string &requested_path, ProgrammerTool &progr
     }
     else
     {
-        auto add_environment = [&](const char *name)
+        add_environment_candidate("NXPC_PROGRAMMER_PATH", candidates);
+        const std::filesystem::path executable = executable_path();
+        if (!executable.empty())
         {
-            char *environment_path = nullptr;
-            size_t environment_bytes = 0u;
-            if ((_dupenv_s(&environment_path, &environment_bytes, name) == 0) &&
-                (environment_path != nullptr) && (environment_path[0] != '\0'))
-            {
-                candidates.push_back(std::filesystem::u8path(environment_path));
-            }
-            std::free(environment_path);
-        };
-        add_environment("NXPC_PROGRAMMER_PATH");
-        std::array<wchar_t, 32768> executable{};
-        const DWORD length =
-            GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
-        if ((length > 0u) && (length < executable.size()))
-        {
-            const std::filesystem::path directory =
-                std::filesystem::path(executable.data()).parent_path();
+            const std::filesystem::path directory = executable.parent_path();
+#if defined(_WIN32)
             candidates.push_back(directory / L"rblhost.exe");
             candidates.push_back(directory / L"blhost.exe");
+#elif defined(__APPLE__)
+            candidates.push_back(directory.parent_path() / "Resources" / "bin" / "rblhost");
+            candidates.push_back(directory / "rblhost");
+#endif
         }
-        add_environment("NXPC_RBLHOST_PATH");
-        add_environment("NXPC_BLHOST_PATH");
+        add_environment_candidate("NXPC_RBLHOST_PATH", candidates);
+        add_environment_candidate("NXPC_BLHOST_PATH", candidates);
+#if defined(_WIN32)
         candidates.emplace_back(
             L"C:\\nxp\\SEC_Provi_26.06\\bin\\_internal\\tools\\spsdk\\blhost.exe");
+#endif
     }
 
     for (const std::filesystem::path &candidate : candidates)
@@ -648,7 +932,7 @@ bool resolve_programmer(const std::string &requested_path, ProgrammerTool &progr
         {
             ProcessResult version;
             std::string version_error;
-            if (!run_process(narrow(path.wstring()), {"--version"}, 5000u, version, version_error))
+            if (!run_process(path_utf8(path), {"--version"}, 5000u, version, version_error))
             {
                 if (!requested_path.empty())
                 {
@@ -661,7 +945,7 @@ bool resolve_programmer(const std::string &requested_path, ProgrammerTool &progr
                 (version.output.find("rblhost 0.2.0") != std::string::npos))
             {
                 programmer.backend = ProgrammerBackend::rblhost;
-                programmer.path = narrow(path.wstring());
+                programmer.path = path_utf8(path);
                 programmer.version = "0.2.0";
                 error.clear();
                 return true;
@@ -670,7 +954,7 @@ bool resolve_programmer(const std::string &requested_path, ProgrammerTool &progr
                 (version.output.find("version 3.10.0") != std::string::npos))
             {
                 programmer.backend = ProgrammerBackend::blhost;
-                programmer.path = narrow(path.wstring());
+                programmer.path = path_utf8(path);
                 programmer.version = "3.10.0";
                 error.clear();
                 return true;
@@ -812,12 +1096,44 @@ bool run_programmer_self_test(std::string &error)
         error = "blhost numeric response parsing failed";
         return false;
     }
+#if defined(_WIN32)
     if (quote_argument(L"C:\\Program Files\\NXP\\blhost.exe") !=
         L"\"C:\\Program Files\\NXP\\blhost.exe\"")
     {
         error = "Windows argument quoting failed";
         return false;
     }
+#elif defined(__APPLE__)
+    std::string process_error;
+    ProcessResult process_success;
+    if (!run_process("/bin/sh", {"-c", "printf nxpc-process-ok"}, 1000u, process_success,
+                     process_error) ||
+        (process_success.exit_code != 0u) || (process_success.output != "nxpc-process-ok"))
+    {
+        error = "macOS subprocess capture self-test failed: " + process_error;
+        return false;
+    }
+
+    ProcessResult bounded_output;
+    if (!run_process("/bin/sh", {"-c", "/usr/bin/yes x | /usr/bin/head -c 1100000"}, 2000u,
+                     bounded_output, process_error) ||
+        (bounded_output.exit_code != 0u) ||
+        (bounded_output.output.size() != kMaximumProcessOutputBytes))
+    {
+        error = "macOS subprocess output-bound self-test failed: " + process_error;
+        return false;
+    }
+
+    ProcessResult timed_process;
+    const auto timeout_started = std::chrono::steady_clock::now();
+    if (run_process("/bin/sh", {"-c", "exec /bin/sleep 2"}, 50u, timed_process, process_error) ||
+        (process_error.find("process timed out") == std::string::npos) ||
+        ((std::chrono::steady_clock::now() - timeout_started) > std::chrono::seconds(1)))
+    {
+        error = "macOS subprocess timeout self-test failed: " + process_error;
+        return false;
+    }
+#endif
     error.clear();
     return true;
 }

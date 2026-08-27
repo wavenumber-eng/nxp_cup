@@ -85,7 +85,8 @@ function Resolve-NxpCupArmTool {
         [string]$ConfiguredPath
     )
 
-    $exe = if ($ToolName -like "*.exe") { $ToolName } else { "$ToolName.exe" }
+    $runningOnMac = ($PSVersionTable.PSEdition -eq "Core") -and $IsMacOS
+    $exe = if ($runningOnMac -or ($ToolName -like "*.exe")) { $ToolName } else { "$ToolName.exe" }
 
     if ($env:NXPC_ARM_TOOLCHAIN_DIR) {
         $candidate = Join-Path $env:NXPC_ARM_TOOLCHAIN_DIR $exe

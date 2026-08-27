@@ -77,7 +77,7 @@ function(_mcux_find_tool out_var tool_name description)
         message(FATAL_ERROR
             "${description} not found.
 "
-            "Run the repository-root .\setup.ps1 to provision a standalone Arm GNU toolchain, "
+            "Run the repository-root setup.sh on macOS or .\setup.ps1 on Windows to provision a standalone Arm GNU toolchain, "
             "or set NXPC_ARM_TOOLCHAIN_DIR to a toolchain bin directory, "
             "or set MCUXPRESSO_IDE to the MCUXpresso IDE 'ide' directory.")
     endif()

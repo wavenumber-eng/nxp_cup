@@ -3,8 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "build:standalone": "powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/build-web.ps1",
-    "check:dashboard": "powershell -NoProfile -ExecutionPolicy Bypass -File ../web/build.ps1 -Check",
+    "build:standalone": "node ./tools/run-powershell.js ./tools/build-web.ps1",
+    "check:dashboard": "node ./tools/run-powershell.js ../web/build.ps1 -Check",
     "check:lessons": "python ../../scripts/tools/build_learning_pages.py --check",
     "test": "npm run check:dashboard && npm run check:lessons && playwright test"
   },

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "upstream": "https://github.com/nxp-mcuxpresso/rblhost.git",
+  "version": "0.2.0",
+  "sourceCommit": "7a775dde2c44bd345a1ac067698afa999bd71be0",
+  "rustVersion": "1.96.1",
+  "binaries": {
+    "windowsX64": {
+      "file": "rblhost.exe",
+      "sha256": "6cae03c432489e0bd8a658f91e5899e7d1153b6859be02c7a76798f2885cd2a8"
+    },
+    "macosArm64": {
+      "file": "rblhost-macos-arm64",
+      "sha256": "d75babe663d783ad83a5c5b760ef0581080227031f8d74256fc282d3d2c76344"
+    }
+  }
+}

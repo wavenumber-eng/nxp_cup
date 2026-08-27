@@ -18,3 +18,18 @@ module = "src/embedded/CMakePresets.json"
 [subtests.test_functions]
 test_competition_builds = "the competition preset produces nxp_cup_core0.axf"
 test_source_list_has_not_drifted = "the committed source list matches MCUXpresso project metadata"
+
+[[subtests]]
+id = "L1_002"
+file = "test_L1_002_macos_host_release.py"
+name = "macOS host release"
+description = "The native Mac host package is deterministic and passes the guarded release dry run"
+test_case_type = "algorithmic"
+
+[subtests.code_under_test]
+module = "src/host/package.ps1"
+
+[subtests.test_functions]
+test_package_archive_is_deterministic_and_self_describing = "two package runs match and every manifest digest is correct"
+test_extracted_package_preserves_modes_signatures_and_selftest = "the extracted arm64 payload is executable, signed, and self-testing"
+test_macos_release_dry_run_reaches_the_no_upload_gate = "the opt-in full release path completes without uploading"

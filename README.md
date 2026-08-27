@@ -1,15 +1,18 @@
 # NXP Cup
 
 This repository contains the organizer-supplied NXP Cup platform used at FIT:
-MCXN947 firmware, Windows/browser host tools, an Android telemetry relay, shared
+MCXN947 firmware, Windows/macOS/browser host tools, an Android telemetry relay, shared
 libraries, tests, and teaching material.
 
 ## Start here
 
-Students: open the **[Windows setup guide](docs/setup.html)** after downloading
-or cloning the repository. It is the authoritative guide for PowerShell
-permissions, setup on a personal laptop, building, ROM-HID flashing through
-J11, the viewer, physical recovery, and offline archives.
+Students: choose the authoritative setup guide for the computer you are using:
+
+- **[Windows setup guide](docs/setup.html)**
+- **[Apple Silicon macOS setup and build guide](docs/setup-macos.md)**
+
+They cover setup on a personal laptop, building, ROM-HID flashing through J11,
+the viewer, permissions, and physical recovery.
 
 After setup, use **[Building the Code](docs/building-the-code.html)** for the
 short, repeatable edit, build, flash, and viewer workflow.
@@ -23,6 +26,16 @@ code .
 .\src\embedded\build.ps1
 .\src\embedded\flash.ps1
 .\out\artifacts\host\nxpc_viewer.exe
+```
+
+On an Apple Silicon Mac, follow the Mac guide to install the unsigned viewer
+package, then use the same component scripts through PowerShell 7:
+
+```sh
+./setup.sh -SkipCoreTools
+pwsh -NoProfile -File src/embedded/build.ps1
+pwsh -NoProfile -File src/embedded/flash.ps1
+open "out/artifacts/host/NXP Cup Viewer.app"
 ```
 
 The setup script provisions the pinned Arm GNU compiler, CMake, Ninja, and the

@@ -8,6 +8,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $componentRoot "..\..")).Path
 $templatePath = Join-Path $componentRoot "dashboard\dashboard.html"
 $cssPath = Join-Path $componentRoot "dashboard\dashboard.css"
 $presentationPath = Join-Path $componentRoot "dashboard\dashboard.js"
+$newline = [Environment]::NewLine
 
 $targets = @(
     @{
@@ -33,9 +34,9 @@ $failed = $false
 foreach ($target in $targets) {
     $adapter = Get-Content -LiteralPath $target.Adapter -Raw
     $html = $template.Replace("{{TRANSPORT}}", $target.Transport)
-    $html = $html.Replace("<!-- NXPC_DASHBOARD_STYLE -->", "<style>`r`n$css`r`n</style>")
-    $html = $html.Replace("<!-- NXPC_DASHBOARD_SCRIPT -->", "<script>`r`n$presentation`r`n</script>")
-    $html = $html.Replace("<!-- NXPC_ADAPTER_SCRIPT -->", "<script>`r`n$adapter`r`n</script>")
+    $html = $html.Replace("<!-- NXPC_DASHBOARD_STYLE -->", "<style>$newline$css$newline</style>")
+    $html = $html.Replace("<!-- NXPC_DASHBOARD_SCRIPT -->", "<script>$newline$presentation$newline</script>")
+    $html = $html.Replace("<!-- NXPC_ADAPTER_SCRIPT -->", "<script>$newline$adapter$newline</script>")
 
     if ($html -match '(?i)<(?:script|link|img|source)[^>]+(?:src|href)\s*=\s*["''](?:https?:)?//' -or
         $html -match '(?i)@import\s+(?:url\()?\s*["'']?(?:https?:)?//' -or

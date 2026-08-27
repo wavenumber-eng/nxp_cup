@@ -9,6 +9,7 @@ directories; they are not student-facing presets.
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,9 @@ def _arm_toolchain_available() -> bool:
         return True
     if list((REPO / "out" / "toolchains").glob(
             "arm-gnu-toolchain-*-arm-none-eabi/bin/arm-none-eabi-gcc.exe")):
+        return True
+    if list((REPO / "out" / "toolchains").glob(
+            "arm-gnu-toolchain-*-arm-none-eabi/bin/arm-none-eabi-gcc")):
         return True
     return Path("C:/nxp/MCUXpressoIDE_25.6.136/ide/tools/bin/arm-none-eabi-gcc.exe").is_file()
 
@@ -61,10 +65,17 @@ def test_source_list_has_not_drifted():
     """The committed source list is the source of truth. If the MCUXpresso
     project changed without regenerating it, say so here rather than letting
     the difference sit unnoticed."""
+    powershell = "powershell.exe" if sys.platform == "win32" else "pwsh"
+    arguments = [powershell, "-NoProfile"]
+    if sys.platform == "win32":
+        arguments.extend(["-ExecutionPolicy", "Bypass"])
+    arguments.extend([
+        "-File", str(REPO / "src/embedded/tools/maintainer/build_cmake.ps1"),
+        "-CheckDrift", "-BuildDir",
+        str(REPO / "out" / "build" / "embedded" / "drift-check"),
+    ])
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-         str(REPO / "src/embedded/tools/maintainer/build_cmake.ps1"), "-CheckDrift",
-         "-BuildDir", str(REPO / "out" / "build" / "embedded" / "drift-check")],
+        arguments,
         cwd=REPO, capture_output=True, text=True, timeout=1800,
     )
     assert "[DRIFT]" not in result.stdout, (

@@ -5,7 +5,14 @@ param(
 
     [string]$Repository = "wavenumber-eng/nxp_cup",
 
+    [ValidateSet("Auto", "Windows", "MacOS")]
+    [string]$Platform = "Auto",
+
     [switch]$Publish,
+
+    [string]$SigningIdentity = "-",
+
+    [string]$NotaryProfile,
 
     [switch]$AllowDirty,
 
@@ -17,8 +24,27 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptDir "../..")).Path
 $packageScript = Join-Path $scriptDir "package.ps1"
-$releaseTag = "core-tools-v$Version"
-$packageName = "nxp-cup-core-tools-win-x64-$Version"
+$runningOnMac = ($PSVersionTable.PSEdition -eq "Core") -and $IsMacOS
+$runningOnWindows = -not $runningOnMac -and ($env:OS -eq "Windows_NT")
+$targetPlatform = if ($Platform -eq "Auto") {
+    if ($runningOnMac) { "MacOS" } elseif ($runningOnWindows) { "Windows" } else { "Unsupported" }
+} else {
+    $Platform
+}
+$isMacRelease = $targetPlatform -eq "MacOS"
+if (($isMacRelease -and (-not $runningOnMac)) -or
+        (($targetPlatform -eq "Windows") -and (-not $runningOnWindows))) {
+    throw "$targetPlatform core tools must be built and validated on that operating system."
+}
+if ($targetPlatform -eq "Unsupported") {
+    throw "Core-tools releases are supported only on Windows x64 and macOS arm64."
+}
+$releaseTag = if ($isMacRelease) { "core-tools-macos-v$Version" } else { "core-tools-v$Version" }
+$packageName = if ($isMacRelease) {
+    "nxp-cup-core-tools-macos-arm64-$Version"
+} else {
+    "nxp-cup-core-tools-win-x64-$Version"
+}
 
 function Invoke-NativeChecked {
     param(
@@ -38,6 +64,26 @@ function Invoke-NativeChecked {
     }
 }
 
+function Get-NormalizedRelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseDirectory,
+        [Parameter(Mandatory = $true)][string]$LiteralPath
+    )
+
+    $separator = [System.IO.Path]::DirectorySeparatorChar
+    $basePrefix = [System.IO.Path]::GetFullPath($BaseDirectory).TrimEnd($separator) + $separator
+    $fullPath = [System.IO.Path]::GetFullPath($LiteralPath)
+    $comparison = if ($runningOnMac) {
+        [System.StringComparison]::Ordinal
+    } else {
+        [System.StringComparison]::OrdinalIgnoreCase
+    }
+    if (-not $fullPath.StartsWith($basePrefix, $comparison)) {
+        throw "Path is outside the validation root: $fullPath"
+    }
+    return $fullPath.Substring($basePrefix.Length).Replace($separator, '/')
+}
+
 function Test-CoreToolsArchive {
     param(
         [Parameter(Mandatory = $true)]
@@ -45,6 +91,12 @@ function Test-CoreToolsArchive {
 
         [Parameter(Mandatory = $true)]
         [string]$ExpectedVersion,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Windows", "MacOS")]
+        [string]$ExpectedPlatform,
+
+        [switch]$RequirePublishReady,
 
         [Parameter(Mandatory = $true)]
         [string]$ValidationRoot
@@ -55,7 +107,12 @@ function Test-CoreToolsArchive {
         Remove-Item -LiteralPath $extractPath -Recurse -Force
     }
     New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
-    Expand-Archive -LiteralPath $ZipPath -DestinationPath $extractPath
+    if ($ExpectedPlatform -eq "MacOS") {
+        Invoke-NativeChecked -Command "ditto" -Arguments @("-x", "-k", $ZipPath, $extractPath) `
+            -FailureMessage "Could not extract the macOS package"
+    } else {
+        Expand-Archive -LiteralPath $ZipPath -DestinationPath $extractPath
+    }
 
     $manifestPath = Join-Path $extractPath "manifest.json"
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
@@ -65,20 +122,39 @@ function Test-CoreToolsArchive {
     if ($manifest.releaseVersion -ne $ExpectedVersion) {
         throw "Package validation failed: expected version $ExpectedVersion, found $($manifest.releaseVersion)"
     }
-    if (($manifest.platform -ne "windows") -or ($manifest.architecture -ne "x64")) {
-        throw "Package validation failed: expected Windows x64 metadata"
+    $expectedPlatformName = if ($ExpectedPlatform -eq "MacOS") { "macos" } else { "windows" }
+    $expectedArchitecture = if ($ExpectedPlatform -eq "MacOS") { "arm64" } else { "x64" }
+    if (($manifest.platform -ne $expectedPlatformName) -or
+            ($manifest.architecture -ne $expectedArchitecture)) {
+        throw "Package validation failed: expected $expectedPlatformName $expectedArchitecture metadata"
     }
 
-    $expectedNames = @(
-        "Dear-ImGui-LICENSE.txt",
-        "nxpc_tool.exe",
-        "nxpc_viewer.exe",
-        "rblhost.exe",
-        "rblhost-LICENSE.txt",
-        "HOST-README.md",
-        "SDL2.dll",
-        "SDL2-LICENSE.txt"
-    )
+    $expectedNames = if ($ExpectedPlatform -eq "MacOS") {
+        @(
+            "Dear-ImGui-LICENSE.txt",
+            "HOST-README.md",
+            "NXP Cup Viewer.app/Contents/_CodeSignature/CodeResources",
+            "NXP Cup Viewer.app/Contents/Info.plist",
+            "NXP Cup Viewer.app/Contents/MacOS/NXP Cup Viewer",
+            "NXP Cup Viewer.app/Contents/Resources/bin/rblhost",
+            "NXP Cup Viewer.app/Contents/Resources/licenses/rblhost-LICENSE.txt",
+            "nxpc_tool",
+            "rblhost",
+            "rblhost-LICENSE.txt",
+            "SDL2-LICENSE.txt"
+        )
+    } else {
+        @(
+            "Dear-ImGui-LICENSE.txt",
+            "nxpc_tool.exe",
+            "nxpc_viewer.exe",
+            "rblhost.exe",
+            "rblhost-LICENSE.txt",
+            "HOST-README.md",
+            "SDL2.dll",
+            "SDL2-LICENSE.txt"
+        )
+    }
     $manifestNames = @($manifest.files | ForEach-Object { $_.name } | Sort-Object)
     if (($manifestNames -join "`n") -ne (($expectedNames | Sort-Object) -join "`n")) {
         throw "Package validation failed: manifest payload does not match the release contract"
@@ -96,21 +172,119 @@ function Test-CoreToolsArchive {
         }
     }
 
-    $unexpected = @(
-        Get-ChildItem -LiteralPath $extractPath -File |
-            Where-Object { $_.Name -ne "manifest.json" -and $_.Name -notin $expectedNames }
+    $actualNames = @(
+        Get-ChildItem -LiteralPath $extractPath -File -Recurse |
+            Where-Object { $_.FullName -ne $manifestPath } |
+            ForEach-Object {
+                Get-NormalizedRelativePath -BaseDirectory $extractPath `
+                    -LiteralPath $_.FullName
+            } |
+            Sort-Object
     )
-    if ($unexpected.Count -gt 0) {
-        throw "Package validation failed: unexpected file $($unexpected[0].Name)"
+    if (($actualNames -join "`n") -ne (($expectedNames | Sort-Object) -join "`n")) {
+        throw "Package validation failed: archive payload does not match the release contract"
     }
 
-    $tool = Join-Path $extractPath "nxpc_tool.exe"
+    $toolName = if ($ExpectedPlatform -eq "MacOS") { "nxpc_tool" } else { "nxpc_tool.exe" }
+    $tool = Join-Path $extractPath $toolName
     Invoke-NativeChecked -Command $tool -Arguments @("selftest") `
         -FailureMessage "Packaged nxpc_tool self-test failed"
+
+    if ($ExpectedPlatform -eq "MacOS") {
+        if (($manifest.schemaVersion -ne 2) -or ($manifest.minimumOsVersion -ne "13.0") -or
+                ($manifest.bundleIdentifier -ne "com.wavenumber.nxpc.viewer")) {
+            throw "Package validation failed: macOS schema, minimum OS, or bundle identifier is invalid"
+        }
+        if ($RequirePublishReady) {
+            if (($manifest.signing.state -ne "developer-id") -or
+                    (-not $manifest.signing.hardenedRuntime) -or
+                    (-not $manifest.signing.notarized) -or
+                    [string]::IsNullOrWhiteSpace($manifest.signing.notarySubmissionId)) {
+                throw "Package validation failed: macOS publication requires Developer ID signing and accepted notarization"
+            }
+        } elseif ($manifest.signing.notarized) {
+            throw "Package validation failed: a local dry run must not claim Apple notarization"
+        }
+
+        $app = Join-Path $extractPath "NXP Cup Viewer.app"
+        $appExecutable = Join-Path $app "Contents/MacOS/NXP Cup Viewer"
+        $appProgrammer = Join-Path $app "Contents/Resources/bin/rblhost"
+        $programmer = Join-Path $extractPath "rblhost"
+        foreach ($executable in @($tool, $programmer, $appExecutable, $appProgrammer)) {
+            $mode = [System.IO.File]::GetUnixFileMode($executable)
+            if (($mode -band [System.IO.UnixFileMode]::UserExecute) -eq 0) {
+                throw "Package validation failed: executable mode is missing on $executable"
+            }
+            $architectures = (& lipo -archs $executable 2>&1 | Out-String).Trim()
+            if (($LASTEXITCODE -ne 0) -or ($architectures -ne "arm64")) {
+                throw "Package validation failed: expected a thin arm64 executable at $executable"
+            }
+            $dependencies = @(& otool -L $executable 2>&1)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Package validation failed: could not inspect dynamic dependencies for $executable"
+            }
+            foreach ($dependencyLine in $dependencies | Select-Object -Skip 1) {
+                $dependency = ($dependencyLine.Trim() -split '\s+')[0]
+                if (($dependency -notlike "/System/Library/*") -and
+                        ($dependency -notlike "/usr/lib/*")) {
+                    throw "Package validation failed: non-system dependency $dependency in $executable"
+                }
+            }
+            Invoke-NativeChecked -Command "codesign" `
+                -Arguments @("--verify", "--strict", "--verbose=2", $executable) `
+                -FailureMessage "Code-signature verification failed for $executable"
+        }
+        Invoke-NativeChecked -Command "codesign" `
+            -Arguments @("--verify", "--deep", "--strict", "--verbose=2", $app) `
+            -FailureMessage "Deep app-signature verification failed"
+
+        foreach ($versionedExecutable in @($tool, $appExecutable)) {
+            $loadCommands = (& otool -l $versionedExecutable 2>&1 | Out-String)
+            if (($LASTEXITCODE -ne 0) -or
+                    ($loadCommands -notmatch "(?ms)cmd LC_BUILD_VERSION.*?minos 13\.0")) {
+                throw "Package validation failed: expected minimum macOS 13.0 in $versionedExecutable"
+            }
+        }
+        $infoPlist = Join-Path $app "Contents/Info.plist"
+        $bundleIdentifier = (& plutil -extract CFBundleIdentifier raw -o - $infoPlist 2>&1 |
+            Out-String).Trim()
+        $bundleVersion = (& plutil -extract CFBundleShortVersionString raw -o - $infoPlist 2>&1 |
+            Out-String).Trim()
+        if (($bundleIdentifier -ne "com.wavenumber.nxpc.viewer") -or
+                ($bundleVersion -ne $ExpectedVersion)) {
+            throw "Package validation failed: app bundle identity or version is incorrect"
+        }
+        if ($RequirePublishReady) {
+            Invoke-NativeChecked -Command "xcrun" -Arguments @("stapler", "validate", $app) `
+                -FailureMessage "The packaged app does not have a valid stapled notarization ticket"
+            Invoke-NativeChecked -Command "spctl" `
+                -Arguments @("--assess", "--type", "execute", "--verbose=2", $app) `
+                -FailureMessage "Gatekeeper rejected the packaged app"
+        }
+    } elseif ($manifest.schemaVersion -ne 1) {
+        throw "Package validation failed: Windows manifest schema 1 changed"
+    }
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {
-    throw "Core-tools releases must be built on 64-bit Windows."
+    throw "Core-tools releases must be built on a 64-bit operating system."
+}
+if ($isMacRelease) {
+    $machineArchitecture = (& uname -m 2>&1 | Out-String).Trim()
+    if (($LASTEXITCODE -ne 0) -or ($machineArchitecture -ne "arm64")) {
+        throw "Mac core-tools releases must be built on Apple Silicon arm64."
+    }
+    if ($Publish -and ($SigningIdentity -notmatch "^Developer ID Application:")) {
+        throw "Mac publication requires -SigningIdentity with a Developer ID Application identity."
+    }
+    if ($Publish -and [string]::IsNullOrWhiteSpace($NotaryProfile)) {
+        throw "Mac publication requires an external -NotaryProfile for Apple notarytool."
+    }
+    if ((-not $Publish) -and (-not [string]::IsNullOrWhiteSpace($NotaryProfile))) {
+        throw "-NotaryProfile is used only by a Mac -Publish run."
+    }
+} elseif (($SigningIdentity -ne "-") -or (-not [string]::IsNullOrWhiteSpace($NotaryProfile))) {
+    throw "Apple signing and notarization options are valid only for a Mac release."
 }
 if ($Publish -and $AllowDirty) {
     throw "-AllowDirty is available only for local dry runs; publishing requires a clean source tree."
@@ -134,13 +308,14 @@ if (-not [string]::IsNullOrWhiteSpace($status)) {
     Write-Warning "Local dry run is using a dirty source tree because -AllowDirty was explicit."
 }
 
-Write-Host "Building and testing core tools from $sourceCommit..." -ForegroundColor Cyan
-& (Join-Path $scriptDir "build.ps1") -Configuration Release -Toolchain Clang
+Write-Host "Building and testing $targetPlatform core tools from $sourceCommit..." -ForegroundColor Cyan
+& (Join-Path $scriptDir "build.ps1") -Configuration Release -Toolchain Clang -Version $Version
 if ($LASTEXITCODE -ne 0) {
     throw "Host build failed with exit code $LASTEXITCODE"
 }
 
-$builtTool = Join-Path $repoRoot "out/build/host/runtime/Release/nxpc_tool.exe"
+$builtToolName = if ($isMacRelease) { "nxpc_tool" } else { "nxpc_tool.exe" }
+$builtTool = Join-Path $repoRoot "out/build/host/runtime/Release/$builtToolName"
 Invoke-NativeChecked -Command $builtTool -Arguments @("selftest") `
     -FailureMessage "Built nxpc_tool self-test failed"
 Invoke-NativeChecked -Command "npm" -Arguments @("ci", "--prefix", $scriptDir) `
@@ -164,6 +339,13 @@ $packageArguments = @{
     SkipBuild = $true
     Force = $Force
 }
+if ($isMacRelease) {
+    $packageArguments.SigningIdentity = $SigningIdentity
+    if ($Publish) {
+        $packageArguments.Notarize = $true
+        $packageArguments.NotaryProfile = $NotaryProfile
+    }
+}
 $package = & $packageScript @packageArguments
 $zipHash = (Get-FileHash -LiteralPath $package.ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $checksumLine = (Get-Content -LiteralPath $package.ChecksumPath -Raw).Trim()
@@ -177,7 +359,7 @@ if (Test-Path -LiteralPath $validationRoot) {
 }
 New-Item -ItemType Directory -Force -Path $validationRoot | Out-Null
 Test-CoreToolsArchive -ZipPath $package.ZipPath -ExpectedVersion $Version `
-    -ValidationRoot $validationRoot
+    -ExpectedPlatform $targetPlatform -RequirePublishReady:$Publish -ValidationRoot $validationRoot
 
 $packageManifest = Get-Content -LiteralPath (Join-Path $package.StagingPath "manifest.json") -Raw |
     ConvertFrom-Json
@@ -250,18 +432,33 @@ if ($exactTag.Count -gt 0) {
     throw "GitHub tag $releaseTag already exists without a release; refusing to attach assets to an unknown commit."
 }
 
-$releaseNotes = @"
+$releaseNotes = if ($isMacRelease) {
+@"
+Prebuilt NXP Cup student core tools for Apple Silicon macOS 13 or newer.
+
+Includes the signed and notarized native viewer app, command-line tool, statically
+linked SDL2, and pinned NXP ROM-HID programmer. J-Link is not included or required
+for the normal flow.
+"@
+} else {
+@"
 Prebuilt NXP Cup student core tools for Windows x64.
 
 Includes the native viewer, command-line tool, SDL2 runtime, and pinned NXP
 ROM-HID programmer. J-Link is not included or required for the normal flow.
 "@
+}
+$releaseTitle = if ($isMacRelease) {
+    "NXP Cup macOS core tools $Version"
+} else {
+    "NXP Cup core tools $Version"
+}
 Invoke-NativeChecked -Command "gh" -Arguments @(
     "release", "create", $releaseTag,
     $package.ZipPath, $package.ChecksumPath,
     "--repo", $Repository,
     "--target", $sourceCommit,
-    "--title", "NXP Cup core tools $Version",
+    "--title", $releaseTitle,
     "--notes", $releaseNotes,
     "--draft"
 ) -FailureMessage "Could not create the draft GitHub release"
@@ -280,6 +477,7 @@ if ($downloadHash -ne $zipHash) {
     throw "Downloaded GitHub asset hash does not match the local release archive; the draft was not published."
 }
 Test-CoreToolsArchive -ZipPath $downloadedZip -ExpectedVersion $Version `
+    -ExpectedPlatform $targetPlatform -RequirePublishReady:$Publish `
     -ValidationRoot (Join-Path $validationRoot "github-package")
 
 Invoke-NativeChecked -Command "gh" -Arguments @(
