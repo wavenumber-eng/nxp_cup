@@ -12,6 +12,11 @@ REPO = Path(__file__).resolve().parents[2]
 BUILDER_PATH = REPO / "scripts" / "tools" / "build_learning_pages.py"
 OUTPUT_PATH = REPO / "docs" / "learn" / "color-spaces.html"
 RGB565_OUTPUT_PATH = REPO / "docs" / "learn" / "rgb565-lookup.html"
+FRAMEWORK_OUTPUT_PATH = REPO / "docs" / "learn" / "framework-structure.html"
+FRAME_INDEXING_OUTPUT_PATH = REPO / "docs" / "learn" / "frame-indexing.html"
+CAMERA_SCANLINE_LAB_OUTPUT_PATH = (
+    REPO / "docs" / "learn" / "camera_scanline_lab.html"
+)
 
 
 def load_builder():
@@ -85,6 +90,71 @@ def test_rgb565_lookup_page_matches_firmware_table_contract():
     assert "77R + 150G + 29B + 128" in expected
     assert "new THREE" not in expected
     assert "race decisions" in authored_page
+    assert not re.search(
+        r"<(?:script|link)\b[^>]+(?:src|href)\s*=",
+        expected,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_framework_structure_page_matches_dispatch_and_safety_contract():
+    builder = load_builder()
+    expected = builder.render_framework_structure()
+
+    assert FRAMEWORK_OUTPUT_PATH.read_text(encoding="utf-8") == expected
+    assert "test_mode_on_frame(frame)" in expected
+    assert "race_mode_on_frame(frame)" in expected
+    assert "vision_test_on_frame(frame)" in expected
+    assert "41 ms" in expected
+    assert "100 ms" in expected
+    assert "SAFE_FAULT" in expected
+    assert "frame pointer" in expected
+    assert "framework-structure.js" not in expected
+    assert "new THREE" not in expected
+    assert not re.search(
+        r"<(?:script|link)\b[^>]+(?:src|href)\s*=",
+        expected,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_frame_indexing_page_teaches_real_camera_memory_contract():
+    builder = load_builder()
+    expected = builder.render_frame_indexing()
+
+    assert FRAME_INDEXING_OUTPUT_PATH.read_text(encoding="utf-8") == expected
+    assert "320 &times; 200" in expected
+    assert "frame[y * CAMERA_STRIDE_PIXELS + x]" in expected
+    assert "camera_row(frame, y)" in expected
+    assert "uint16_t" in expected
+    assert "64,000 pixels" in expected
+    assert "128,000 bytes" in expected
+    assert "valid only until the callback returns" in expected
+    assert "frame-indexing.js" not in expected
+    assert "new THREE.WebGLRenderer" in expected
+    assert not re.search(
+        r"<(?:script|link)\b[^>]+(?:src|href)\s*=",
+        expected,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_camera_scanline_lab_is_offline_and_preserves_the_simulator_source():
+    builder = load_builder()
+    expected = builder.render_camera_scanline_lab()
+    original = (REPO / "docs" / "learn" / "camera_sim.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert CAMERA_SCANLINE_LAB_OUTPUT_PATH.read_text(encoding="utf-8") == expected
+    assert "Interactive Scanline Computation Lab" in expected
+    assert "mass[x] = 255 − Y[x]" in expected
+    assert "weight2[x] = 2x − 319" in expected
+    assert "Compare a second row" in expected
+    assert "GLTFLoader" in expected
+    assert 'type="importmap"' not in expected
+    assert "Open computation lab" not in original
+    assert "scanlineLabOnFrame" not in original
     assert not re.search(
         r"<(?:script|link)\b[^>]+(?:src|href)\s*=",
         expected,

@@ -218,6 +218,18 @@ status = "active"
 depends_on = ["client-video-selection"]
 
 [[steps]]
+id = "remote-race-actions"
+title = "Add capability-gated remote Race Start and Stop with deliberate browser controls and bounded USB-worker delivery"
+status = "done"
+depends_on = ["client-video-selection"]
+
+[[steps]]
+id = "android-f1-overlay"
+title = "Remove the legacy Android relay presentation and carry the Formula One overlay over the proven relay adapter"
+status = "done"
+depends_on = ["client-video-selection"]
+
+[[steps]]
 id = "android-app-role-structure"
 title = "Define a shared Kotlin core and choose one configurable app or separate viewer-only and relay app modules before parallel Android implementation"
 status = "pending"
@@ -240,7 +252,8 @@ worktree. `src/web` owns transport-neutral dashboard markup, styling, presentati
 and the deterministic standalone-page generator. WebSerial connection, `AVCU` parsing,
 system actions, and direct RGB565 input remain in `src/host/web/webserial_adapter.js`.
 Android WebSocket connection, JPEG/H.264/raw mode selection, `AVCJ`/`AVC4`/`AVCR`, and
-relayed `AVCU` telemetry remain in `src/android/web/relay_adapter.js`. The generated host
+relayed `AVCU` telemetry plus typed Race Start/Stop forwarding remain in
+`src/android/web/relay_adapter.js`. The generated host
 and Android pages are committed, dependency-free runtime outputs checked by
 `src/web/build.ps1 -Check`.
 
@@ -257,8 +270,8 @@ parallel agents.
 
 On 2026-08-26, the shared-dashboard implementation and automated validation reached a
 pause checkpoint. The generated-page drift check and all 14 Playwright browser tests
-passed, including Android JPEG, H.264, raw RGB565, generic telemetry, and read-only
-vehicle behavior. The pinned offline Android build and JVM unit tests also passed using
+passed, including Android JPEG, H.264, raw RGB565, generic telemetry, and the initial
+read-only relay behavior. The pinned offline Android build and JVM unit tests also passed using
 the reusable tool cache at `C:\ELI\fit2026\avc\out\toolchains\android`; the resulting APK
 is `out/artifacts/android/nxp_cup_bridge.apk`. The branch was then synchronized without
 conflict through `origin/main` at `d96ebdd`; the shared-dashboard implementation is
@@ -277,6 +290,13 @@ development PC on its normal network and use a second PC joined to the phone hot
 open the exact `http://<phone-address>:8765/` URL shown by the app. Re-run the real-phone
 relay and direct WebSerial hardware checks before marking `shared-web-dashboard` done and
 closing the step.
+
+On 2026-08-27, the Android relay gained the same narrowly scoped remote Race Start and
+Stop behavior as the direct WebSerial viewer. The browser requires Race-mode telemetry,
+the firmware system-action capability, and a 1.5-second hold before Start; Stop is
+immediate. The native USB worker retains one pending action with Stop priority, and no
+general actuator or mode command is exposed. The Formula One presentation remains the
+sole generated Android HTML page, with the stacked readout regression retained.
 
 The first GitHub-release candidate is also prepared. `src/android/release.ps1` validates
 the shared generated pages, browser tests, clean Android build, package/version metadata,

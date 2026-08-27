@@ -1,0 +1,124 @@
+<!-- __TOOLBAR_BEGIN__ -->
+<nav id="sim-lab-toolbar" aria-label="Simulator views">
+  <button id="toggle-sim-controls" type="button" aria-pressed="true">Hide controls</button>
+  <button id="toggle-sim-overview" type="button" aria-pressed="false">Focus camera</button>
+  <button id="open-scanline-lab" class="toolbar-primary" type="button">Open computation lab</button>
+</nav>
+<!-- __TOOLBAR_END__ -->
+
+<!-- __SECOND_ROW_CONTROLS_BEGIN__ -->
+      <label class="second-row-toggle"><input id="row2Enabled" type="checkbox"> Add a second scanline</label>
+      <div id="row2Controls" hidden>
+        <label>Scan row B: <b id="r2Val">y = 170</b> <span id="r2d" class="rowdist"></span></label>
+        <input id="row2" type="range" min="0" max="199" step="1" value="170">
+      </div>
+<!-- __SECOND_ROW_CONTROLS_END__ -->
+
+<!-- __SECOND_PLOT_BEGIN__ -->
+    <div id="plot2Group" hidden>
+      <h2>Raw scan-row B Y profile</h2>
+      <canvas id="plot2" class="plot" width="640" height="130"></canvas>
+    </div>
+<!-- __SECOND_PLOT_END__ -->
+
+<!-- __LAB_BEGIN__ -->
+<section id="scanline-lab" class="scanline-lab" hidden aria-labelledby="scanline-lab-title">
+  <header class="lab-header">
+    <div>
+      <p class="lab-kicker">NXP CUP · ONE-DIMENSIONAL VISION</p>
+      <h1 id="scanline-lab-title">Turn one camera row into one measurement.</h1>
+      <p>Follow every number from RGB565 luma through an Excel-like weighted sum. This laboratory produces a measurement; it does not choose a steering response.</p>
+    </div>
+    <button id="close-scanline-lab" type="button">Return to simulator</button>
+  </header>
+
+  <div class="lab-top-grid">
+    <article class="lab-camera-card">
+      <div class="lab-card-heading"><span>LIVE CAMERA FRAME</span><strong>320 × 200 RGB565</strong></div>
+      <div class="lab-feed-wrap">
+        <canvas id="lab-camera-feed" width="320" height="200"></canvas>
+        <canvas id="lab-camera-overlay" width="640" height="400"></canvas>
+      </div>
+    </article>
+
+    <aside class="lab-control-card">
+      <div class="lab-card-heading"><span>CHOOSE THE DATA</span><strong>Scanline controls</strong></div>
+      <label>Row A <output id="lab-row-a-value">150</output></label>
+      <input id="lab-row-a" type="range" min="0" max="199" step="1" value="150">
+      <label class="lab-check"><input id="lab-second-enabled" type="checkbox"> Compare a second row</label>
+      <div id="lab-row-b-controls" hidden>
+        <label>Row B <output id="lab-row-b-value">170</output></label>
+        <input id="lab-row-b" type="range" min="0" max="199" step="1" value="170">
+      </div>
+      <label for="worksheet-line">Worksheet displays</label>
+      <select id="worksheet-line">
+        <option value="a">Row A</option>
+        <option value="b" disabled>Row B</option>
+      </select>
+      <p class="lab-note">Yellow is row A. Cyan is row B. Moving either control changes the camera overlay, graph, worksheet, and result together.</p>
+    </aside>
+  </div>
+
+  <section class="lab-stage" aria-labelledby="lab-stage-title">
+    <div class="lab-stage-heading">
+      <div><p class="lab-kicker">REVEAL THE COMPUTATION</p><h2 id="lab-stage-title">Build the reduction one row at a time.</h2></div>
+      <div class="lab-stage-actions">
+        <button id="lab-previous-step" type="button">Previous</button>
+        <output id="lab-step-output">Step 1 of 5</output>
+        <button id="lab-next-step" type="button">Next</button>
+      </div>
+    </div>
+    <ol class="lab-step-strip">
+      <li data-step="1"><b>1</b><span>Read Y</span></li>
+      <li data-step="2"><b>2</b><span>Invert</span></li>
+      <li data-step="3"><b>3</b><span>Assign weights</span></li>
+      <li data-step="4"><b>4</b><span>Multiply</span></li>
+      <li data-step="5"><b>5</b><span>Reduce</span></li>
+    </ol>
+
+    <div class="lab-equation" aria-label="Center of mass equations">
+      <div><span>BLACK MASS</span><code>mass[x] = 255 − Y[x]</code></div>
+      <div><span>DOUBLED WEIGHT</span><code>weight2[x] = 2x − 319</code></div>
+      <div><span>CONTRIBUTION</span><code>mass[x] × weight2[x]</code></div>
+      <div><span>POSITION</span><code>Σ contribution ÷ (2 × Σ mass)</code></div>
+    </div>
+  </section>
+
+  <section class="lab-results" aria-label="Scanline calculation results">
+    <article class="result-a"><span>ROW A · TOTAL MASS</span><output id="lab-a-mass">—</output></article>
+    <article class="result-a"><span>ROW A · FIRST MOMENT</span><output id="lab-a-moment">—</output></article>
+    <article class="result-a"><span>ROW A · POSITION</span><output id="lab-a-position">—</output><small>pixels from image center</small></article>
+    <article class="result-b" hidden><span>ROW B · POSITION</span><output id="lab-b-position">—</output><small>pixels from image center</small></article>
+  </section>
+
+  <section class="lab-plots" aria-label="Selected scanline plots">
+    <article><div class="lab-card-heading"><span>ROW A</span><strong>Raw luma Y</strong></div><canvas id="lab-plot-a" width="640" height="150"></canvas></article>
+    <article id="lab-plot-b-card" hidden><div class="lab-card-heading"><span>ROW B</span><strong>Raw luma Y</strong></div><canvas id="lab-plot-b" width="640" height="150"></canvas></article>
+  </section>
+
+  <section class="worksheet-section" aria-labelledby="worksheet-title">
+    <div class="worksheet-heading">
+      <div><p class="lab-kicker">THE SPREADSHEET VIEW</p><h2 id="worksheet-title">Every column is one camera pixel.</h2></div>
+      <div id="selected-pixel-detail" class="selected-pixel-detail">Select a column to inspect one multiplication.</div>
+    </div>
+    <p class="worksheet-help">Scroll horizontally to inspect all 320 pixels. Point at any cell to highlight the same pixel throughout the worksheet.</p>
+    <div id="worksheet-scroll" class="worksheet-scroll" tabindex="0" aria-label="Scrollable 320-pixel computation worksheet">
+      <table id="scanline-worksheet">
+        <tbody>
+          <tr id="worksheet-x" data-stage="1"><th scope="row"><b>x</b><small>pixel coordinate</small></th></tr>
+          <tr id="worksheet-y" data-stage="1"><th scope="row"><b>Y[x]</b><small>raw luma</small></th></tr>
+          <tr id="worksheet-mass" data-stage="2"><th scope="row"><b>255 − Y</b><small>black mass</small></th></tr>
+          <tr id="worksheet-weight" data-stage="3"><th scope="row"><b>2x − 319</b><small>doubled weight</small></th></tr>
+          <tr id="worksheet-product" data-stage="4"><th scope="row"><b>mass × weight</b><small>contribution</small></th></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="lab-future">
+    <div><span>NEXT REPRESENTATION</span><strong>Luma threshold</strong><p>Replace continuous mass with a black/white mask and observe what information is lost.</p></div>
+    <div><span>LATER</span><strong>H · S · V gates</strong><p>Use color measurements to form a mask, then feed that mask into the same weighted reduction.</p></div>
+    <div><span>LATER</span><strong>Edges and multiple rows</strong><p>Inspect transitions and compare measurements without prescribing a finished tracking strategy.</p></div>
+  </footer>
+</section>
+<!-- __LAB_END__ -->

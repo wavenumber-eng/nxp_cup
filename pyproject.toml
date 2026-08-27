@@ -1,6 +1,6 @@
 [project]
 name = "nxp-cup"
-version = "0.0.0"
+version = "1.0.0"
 description = "FRDM-MCXN947 NXP Cup firmware project."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

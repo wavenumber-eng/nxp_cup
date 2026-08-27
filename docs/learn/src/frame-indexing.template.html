@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Interactive guide to the Wavenumber NXP Cup RGB565 camera-frame layout and C indexing.">
+  <title>Camera Frame Memory and C Indexing | Wavenumber NXP Cup</title>
+  <!-- __GENERATED_NOTICE__ -->
+  <!-- __LESSON_CSS__ -->
+</head>
+<body class="frame-indexing-lesson">
+  <header class="lesson-bar">
+    <span>NXP CUP &middot; VISION &middot; 04</span>
+    <span>PIXEL (x, y) &rarr; ARRAY INDEX &rarr; MEMORY</span>
+  </header>
+
+  <main>
+    <section class="index-hero" aria-labelledby="page-title">
+      <div>
+        <p class="lesson-kicker">From camera image to C array</p>
+        <h1 id="page-title">A frame looks two-dimensional.<br>Memory is one long row.</h1>
+        <p class="index-lede">The NXP Cup camera gives your callback a flat <code>uint16_t *</code> containing a 320 &times; 200 image. Every RGB565 pixel occupies one array element. Rows are stored left-to-right, then top-to-bottom.</p>
+        <nav class="framework-jump" aria-label="Lesson sections">
+          <a href="#unfold">01 &middot; unfold</a>
+          <a href="#index-lab">02 &middot; index</a>
+          <a href="#real-frame">03 &middot; calculate</a>
+          <a href="#code-patterns">04 &middot; code</a>
+        </nav>
+      </div>
+      <dl class="frame-facts" aria-label="Camera frame facts">
+        <div><dt>WIDTH</dt><dd>320</dd><small>valid x: 0&ndash;319</small></div>
+        <div><dt>HEIGHT</dt><dd>200</dd><small>valid y: 0&ndash;199</small></div>
+        <div><dt>FORMAT</dt><dd>RGB565</dd><small><code>uint16_t</code> per pixel</small></div>
+        <div><dt>TOTAL</dt><dd>64,000 pixels</dd><small>128,000 bytes</small></div>
+      </dl>
+    </section>
+
+    <section id="unfold" class="unfold-section" aria-labelledby="unfold-title">
+      <div class="section-heading">
+        <div><p class="model-number">01 &middot; UNFOLD THE FRAME</p><h2 id="unfold-title">The picture and the array contain the same pixels</h2></div>
+        <p>Drag the control from image layout to memory order. Orbit the view with a pointer.</p>
+      </div>
+      <div class="unfold-layout">
+        <div class="unfold-controls">
+          <label for="unfold-slider"><span>IMAGE</span><span>MEMORY</span></label>
+          <input id="unfold-slider" type="range" min="0" max="100" value="0" aria-describedby="unfold-status">
+          <output id="unfold-status" for="unfold-slider">2D image: five rows of eight pixels</output>
+          <div class="unfold-key">
+            <span><i class="key-first"></i> first pixel <code>(0, 0)</code></span>
+            <span><i class="key-selected"></i> selected pixel</span>
+            <span><i class="key-last"></i> last pixel <code>(7, 4)</code></span>
+          </div>
+          <p>This 8&times;5 teaching frame is small enough to see. At the memory end, all 40 consecutive elements form one non-overlapping row on the same plane. The real camera follows exactly the same order with 320 columns and 200 rows.</p>
+        </div>
+        <div id="memory-scene" class="memory-scene three-scene" aria-label="Interactive 3D model unfolding a pixel grid into linear memory">
+          <p id="memory-scene-fallback" class="render-fallback" hidden>3D rendering is unavailable. Continue with the exact 2D indexing laboratory below.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="index-lab" class="index-lab-section" aria-labelledby="index-title">
+      <div class="section-heading">
+        <div><p class="model-number">02 &middot; CLICK A PIXEL</p><h2 id="index-title">Count complete rows, then move across</h2></div>
+        <p>The teaching grid uses width = 8. Select any cell or move the x/y controls.</p>
+      </div>
+
+      <div class="index-lab">
+        <div class="pixel-grid-wrap">
+          <div class="axis-corner" aria-hidden="true">y\x</div>
+          <div id="column-labels" class="column-labels" aria-hidden="true"></div>
+          <div id="row-labels" class="row-labels" aria-hidden="true"></div>
+          <div id="pixel-grid" class="pixel-grid" role="grid" aria-label="Eight by five row-major pixel array"></div>
+          <div class="axis-x" aria-hidden="true">x increases &rarr;</div>
+          <div class="axis-y" aria-hidden="true">y increases &darr;</div>
+        </div>
+
+        <aside class="index-console" aria-live="polite">
+          <div class="coordinate-controls">
+            <label for="demo-x">x <input id="demo-x" type="range" min="0" max="7" value="3"><output id="demo-x-value" for="demo-x">3</output></label>
+            <label for="demo-y">y <input id="demo-y" type="range" min="0" max="4" value="2"><output id="demo-y-value" for="demo-y">2</output></label>
+          </div>
+          <p class="formula-label">ROW-MAJOR INDEX</p>
+          <div class="index-formula">
+            <span>index</span><b>=</b><span>y</span><b>&times;</b><span>width</span><b>+</b><span>x</span>
+          </div>
+          <div class="index-substitution">
+            <output id="demo-formula">2 &times; 8 + 3 = 19</output>
+          </div>
+          <dl class="coordinate-readout index-readout">
+            <dt>coordinate</dt><dd id="demo-coordinate">(3, 2)</dd>
+            <dt>C expression</dt><dd><code id="demo-expression">frame[19]</code></dd>
+            <dt>byte offset</dt><dd id="demo-byte-offset">38 bytes</dd>
+            <dt>pixel value</dt><dd><code id="demo-pixel-value">0x0000</code></dd>
+          </dl>
+          <p class="pointer-note"><code>frame + 19</code> advances by 19 <em>pixels</em>, not 19 bytes, because <code>frame</code> points to <code>uint16_t</code>.</p>
+        </aside>
+      </div>
+
+      <div class="memory-window" aria-label="Nearby array elements">
+        <div class="memory-window-heading"><span>NEARBY MEMORY</span><span>consecutive <code>uint16_t</code> elements</span></div>
+        <div id="memory-cells" class="memory-cells"></div>
+      </div>
+    </section>
+
+    <section id="real-frame" class="real-frame-section" aria-labelledby="real-title">
+      <div class="section-heading section-heading-light">
+        <div><p class="model-number">03 &middot; REAL CAMERA CALCULATOR</p><h2 id="real-title">Now use width = 320</h2></div>
+        <p>The firmware constants are <code>CAMERA_WIDTH = 320</code>, <code>CAMERA_HEIGHT = 200</code>, and <code>CAMERA_STRIDE_PIXELS = 320</code>.</p>
+      </div>
+      <div class="real-calculator">
+        <div class="number-entry">
+          <label for="real-x">x coordinate <small>0 through 319</small></label>
+          <input id="real-x" type="number" min="0" max="319" value="137" inputmode="numeric">
+        </div>
+        <div class="number-entry">
+          <label for="real-y">y coordinate <small>0 through 199</small></label>
+          <input id="real-y" type="number" min="0" max="199" value="84" inputmode="numeric">
+        </div>
+        <div class="real-result" aria-live="polite">
+          <span>ELEMENT INDEX</span><output id="real-index">27,017</output>
+          <code id="real-equation">84 * 320 + 137</code>
+        </div>
+        <div class="real-result">
+          <span>BYTE OFFSET</span><output id="real-bytes">54,034</output>
+          <code>index * sizeof(uint16_t)</code>
+        </div>
+      </div>
+      <div class="equivalent-code">
+        <article>
+          <p class="path-label">DIRECT FLAT INDEX</p>
+          <pre><code>uint16_t pixel =
+    frame[y * CAMERA_STRIDE_PIXELS + x];</code></pre>
+          <p>Useful when you need one coordinate and want the layout to be explicit.</p>
+        </article>
+        <div class="equivalence-mark" aria-label="is equivalent to">=</div>
+        <article>
+          <p class="path-label">ROW HELPER</p>
+          <pre><code>uint16_t *row = camera_row(frame, y);
+uint16_t pixel = row[x];</code></pre>
+          <p>Usually clearer when scanning several pixels from the same row.</p>
+        </article>
+      </div>
+      <p class="bounds-warning"><strong>Bounds are your responsibility.</strong> <code>camera_row(frame, y)</code> does not clip. Use <code>x &lt; CAMERA_WIDTH</code> and <code>y &lt; CAMERA_HEIGHT</code> before reading.</p>
+    </section>
+
+    <section id="code-patterns" class="code-patterns-section" aria-labelledby="patterns-title">
+      <div class="section-heading">
+        <div><p class="model-number">04 &middot; BASIC C PATTERNS</p><h2 id="patterns-title">Start with a row, then grow carefully</h2></div>
+        <p>These examples inspect pixels only; deciding what they mean remains your algorithm.</p>
+      </div>
+      <div class="pattern-grid">
+        <article class="code-window">
+          <div class="code-window-bar"><span>Read one pixel</span><small>coordinate</small></div>
+          <pre><code>uint32_t x = 100U;
+uint32_t y = 150U;
+
+uint16_t pixel =
+    camera_row(frame, y)[x];</code></pre>
+        </article>
+        <article class="code-window">
+          <div class="code-window-bar"><span>Scan one row</span><small>common first step</small></div>
+          <pre><code>uint16_t *row = camera_row(frame, 150U);
+
+for (uint32_t x = 0U;
+     x &lt; CAMERA_WIDTH;
+     x++)
+{
+    uint16_t pixel = row[x];
+    // Inspect pixel here.
+}</code></pre>
+        </article>
+        <article class="code-window">
+          <div class="code-window-bar"><span>Visit the whole frame</span><small>nested loops</small></div>
+          <pre><code>for (uint32_t y = 0U;
+     y &lt; CAMERA_HEIGHT;
+     y++)
+{
+    uint16_t *row = camera_row(frame, y);
+    for (uint32_t x = 0U;
+         x &lt; CAMERA_WIDTH;
+         x++)
+    {
+        uint16_t pixel = row[x];
+        // Keep work bounded.
+    }
+}</code></pre>
+        </article>
+      </div>
+
+      <div class="mistake-grid" aria-label="Correct indexing and common mistakes">
+        <article class="mistake-good"><span>RIGHT</span><code>frame[y * CAMERA_STRIDE_PIXELS + x]</code><p>Skip <code>y</code> complete rows, then move <code>x</code> pixels into the selected row.</p></article>
+        <article><span>WRONG</span><code>frame[x * CAMERA_HEIGHT + y]</code><p>This swaps the axes and uses the wrong row length.</p></article>
+        <article><span>WRONG</span><code>frame[y * CAMERA_WIDTH]</code><p>This always selects column zero because the <code>+ x</code> is missing.</p></article>
+        <article><span>WRONG</span><code>frame[y][x]</code><p>The callback receives a flat <code>uint16_t *</code>, not a declared two-dimensional C array.</p></article>
+      </div>
+    </section>
+
+    <section class="lifetime-section" aria-labelledby="lifetime-title">
+      <div><p class="model-number">FRAME LIFETIME</p><h2 id="lifetime-title">Borrow it. Use it. Return.</h2></div>
+      <div class="lifetime-flow" aria-label="Frame pointer lifetime">
+        <span>callback begins</span><b>&rarr;</b><span>read or draw pixels</span><b>&rarr;</b><span>callback returns</span><b>&rarr;</b><span class="lifetime-stop">pointer is no longer yours</span>
+      </div>
+      <p>The frame is writable RGB565 and valid only until the callback returns. Do not retain the pointer, free it, or hand it to asynchronous work.</p>
+      <a href="camera_sim.html">Open the related camera simulator &rarr;</a>
+    </section>
+  </main>
+
+  <!-- __THREE_JS__ -->
+  <!-- __LESSON_JS__ -->
+</body>
+</html>

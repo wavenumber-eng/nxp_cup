@@ -1,7 +1,7 @@
 {
   "name": "nxp-cup-host-tests",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "scripts": {
     "build:standalone": "powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/build-web.ps1",
     "check:dashboard": "powershell -NoProfile -ExecutionPolicy Bypass -File ../web/build.ps1 -Check",

@@ -2,6 +2,8 @@ package com.wavenumber.nxpc.bridge.relay
 
 import com.wavenumber.nxpc.bridge.protocol.NxpCupPacket
 import com.wavenumber.nxpc.bridge.protocol.NxpCupProtocol
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemAction
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionResult
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -21,6 +23,25 @@ object NxpCupRelayProtocol {
     const val RAW_HEADER_BYTES = 32
     const val RAW_FLAG_DROPPED_BEFORE = 1
     const val RAW_PIXEL_FORMAT_RGB565_LE = 1
+    private val raceStartCommand =
+        "{\"type\":\"system_action\",\"action\":\"race_start\"}".toByteArray(Charsets.UTF_8)
+    private val stopCommand =
+        "{\"type\":\"system_action\",\"action\":\"stop\"}".toByteArray(Charsets.UTF_8)
+
+    fun decodeSystemActionCommand(payload: ByteArray): NxpCupSystemAction? = when {
+        payload.contentEquals(raceStartCommand) -> NxpCupSystemAction.RACE_START
+        payload.contentEquals(stopCommand) -> NxpCupSystemAction.STOP
+        else -> null
+    }
+
+    fun encodeSystemActionStatus(action: NxpCupSystemAction, outcome: String, detail: String): ByteArray =
+        (
+            "{\"type\":\"system_action_result\",\"action\":\"${action.wireName}\"," +
+                "\"outcome\":\"${jsonEscape(outcome)}\",\"detail\":\"${jsonEscape(detail)}\"}"
+            ).toByteArray(Charsets.UTF_8)
+
+    fun encodeSystemActionResult(result: NxpCupSystemActionResult): ByteArray =
+        encodeSystemActionStatus(result.action, result.outcome.wireName, result.detail)
 
     fun encodeJpegFrame(frame: NxpCupRelayFrame): ByteArray =
         ByteBuffer.allocate(JPEG_HEADER_BYTES + frame.byteCount)
@@ -107,4 +128,17 @@ object NxpCupRelayProtocol {
         .putInt(arg2)
         .put(payload)
         .array()
+
+    private fun jsonEscape(value: String): String = buildString(value.length) {
+        value.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (character.code < 0x20) append('?') else append(character)
+            }
+        }
+    }
 }
