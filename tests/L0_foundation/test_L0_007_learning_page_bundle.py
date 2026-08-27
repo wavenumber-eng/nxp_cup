@@ -147,9 +147,10 @@ def test_camera_scanline_lab_is_offline_and_preserves_the_simulator_source():
     )
 
     assert CAMERA_SCANLINE_LAB_OUTPUT_PATH.read_text(encoding="utf-8") == expected
-    assert "Interactive Scanline Computation Lab" in expected
-    assert "mass[x] = 255 − Y[x]" in expected
-    assert "weight2[x] = 2x − 319" in expected
+    assert "Turn one camera row into black-or-white decisions." in expected
+    assert "mask[x] = (V[x] &lt; 80) ? 1 : 0" in expected
+    assert "black_mask[x] =" in expected
+    assert "blue_mask[x] =" in expected
     assert "Compare a second row" in expected
     assert "GLTFLoader" in expected
     assert 'type="importmap"' not in expected
