@@ -1,10 +1,13 @@
 <!-- __TOOLBAR_BEGIN__ -->
-<nav id="sim-lab-toolbar" aria-label="Simulator views">
-  <button id="toggle-sim-controls" type="button" aria-pressed="true">Hide controls</button>
-  <button id="toggle-sim-overview" type="button" aria-pressed="false">Focus camera</button>
-  <button id="open-scanline-lab" class="toolbar-primary" type="button">Open computation lab</button>
-</nav>
+<button id="show-sim-controls" type="button" hidden>Show controls</button>
 <!-- __TOOLBAR_END__ -->
+
+<!-- __PANEL_LAB_BUTTON_BEGIN__ -->
+<div class="panel-title-actions">
+  <button id="open-scanline-lab" class="panel-lab-button" type="button">One-bit lab</button>
+  <button id="toggle-sim-controls" class="panel-close-button" type="button" aria-label="Hide controls" title="Hide controls">&times;</button>
+</div>
+<!-- __PANEL_LAB_BUTTON_END__ -->
 
 <!-- __SECOND_ROW_CONTROLS_BEGIN__ -->
       <label class="second-row-toggle"><input id="row2Enabled" type="checkbox"> Add a second scanline</label>
@@ -14,20 +17,57 @@
       </div>
 <!-- __SECOND_ROW_CONTROLS_END__ -->
 
+<!-- __MAIN_FILTER_CONTROLS_BEGIN__ -->
+      <fieldset id="sim-filter-controls">
+        <legend>Two one-bit YHSV masks</legend>
+        <label>Source row <select id="filter-row" aria-label="Filter source row"><option value="a">A</option><option value="b" disabled>B</option></select></label>
+        <div id="filter-black-controls" class="filter-thresholds black-filter-controls">
+          <label>Maximum V <output id="filter-black-v-value">80</output></label>
+          <input id="filter-black-v" type="range" min="0" max="255" step="1" value="80">
+        </div>
+        <div id="filter-blue-controls" class="filter-thresholds blue-filter-controls">
+          <label>Hue center / half-width <output><span id="filter-blue-h-value">160</span> ± <span id="filter-blue-width-value">18</span></output></label>
+          <div class="sim-filter-paired-ranges">
+            <input id="filter-blue-h" aria-label="Blue hue center" type="range" min="0" max="255" step="1" value="160">
+            <input id="filter-blue-width" aria-label="Blue hue half-width" type="range" min="0" max="128" step="1" value="18">
+          </div>
+          <label>Minimum S / V <output><span id="filter-blue-s-value">100</span> / <span id="filter-blue-v-value">80</span></output></label>
+          <div class="sim-filter-paired-ranges">
+            <input id="filter-blue-s" aria-label="Blue minimum saturation" type="range" min="0" max="255" step="1" value="100">
+            <input id="filter-blue-v" aria-label="Blue minimum value" type="range" min="0" max="255" step="1" value="80">
+          </div>
+          <button id="filter-view-blue" class="filter-demo-button" type="button">View blue reference</button>
+        </div>
+      </fieldset>
+<!-- __MAIN_FILTER_CONTROLS_END__ -->
+
 <!-- __SECOND_PLOT_BEGIN__ -->
     <div id="plot2Group" hidden>
       <h2>Raw scan-row B Y profile</h2>
-      <canvas id="plot2" class="plot" width="640" height="130"></canvas>
+      <canvas id="plot2" class="plot" width="640" height="96"></canvas>
     </div>
 <!-- __SECOND_PLOT_END__ -->
+
+<!-- __MAIN_FILTER_PLOT_BEGIN__ -->
+    <div id="filterPlotGroup" class="binary-plot-group">
+      <h2>Black / dark one-bit mask</h2>
+      <canvas id="filter-mask-plot" class="plot" width="640" height="96" aria-label="Binary black-filter output across 320 scanline pixels"></canvas>
+      <div id="filter-main-analysis" class="readout">Waiting for black filter output.</div>
+    </div>
+    <div id="blueFilterPlotGroup" class="binary-plot-group">
+      <h2>Blue-token one-bit mask</h2>
+      <canvas id="blue-filter-mask-plot" class="plot" width="640" height="96" aria-label="Binary blue-filter output across 320 scanline pixels"></canvas>
+      <div id="blue-filter-main-analysis" class="readout">Waiting for filter output.</div>
+    </div>
+<!-- __MAIN_FILTER_PLOT_END__ -->
 
 <!-- __LAB_BEGIN__ -->
 <section id="scanline-lab" class="scanline-lab" hidden aria-labelledby="scanline-lab-title">
   <header class="lab-header">
     <div>
       <p class="lab-kicker">NXP CUP · ONE-DIMENSIONAL VISION</p>
-      <h1 id="scanline-lab-title">Turn one camera row into one measurement.</h1>
-      <p>Follow every number from RGB565 luma through an Excel-like weighted sum. This laboratory produces a measurement; it does not choose a steering response.</p>
+      <h1 id="scanline-lab-title">Turn one camera row into black-or-white decisions.</h1>
+      <p>Follow each RGB565 pixel through the firmware-equivalent YHSV conversion and two predicates. Every output sample is exactly <code>0</code> or <code>1</code>; this laboratory does not choose a driving response.</p>
     </div>
     <button id="close-scanline-lab" type="button">Return to simulator</button>
   </header>
@@ -50,75 +90,82 @@
         <label>Row B <output id="lab-row-b-value">170</output></label>
         <input id="lab-row-b" type="range" min="0" max="199" step="1" value="170">
       </div>
-      <label for="worksheet-line">Worksheet displays</label>
-      <select id="worksheet-line">
+      <label for="lab-filter-row">One-bit arrays use</label>
+      <select id="lab-filter-row">
         <option value="a">Row A</option>
         <option value="b" disabled>Row B</option>
       </select>
-      <p class="lab-note">Yellow is row A. Cyan is row B. Moving either control changes the camera overlay, graph, worksheet, and result together.</p>
+      <p class="lab-note">Yellow is row A. Cyan is row B. Choose which row feeds both predicates, then return to the simulator controls to tune their thresholds.</p>
     </aside>
   </div>
 
-  <section class="lab-stage" aria-labelledby="lab-stage-title">
-    <div class="lab-stage-heading">
-      <div><p class="lab-kicker">REVEAL THE COMPUTATION</p><h2 id="lab-stage-title">Build the reduction one row at a time.</h2></div>
-      <div class="lab-stage-actions">
-        <button id="lab-previous-step" type="button">Previous</button>
-        <output id="lab-step-output">Step 1 of 5</output>
-        <button id="lab-next-step" type="button">Next</button>
+  <section class="filter-lab" aria-labelledby="filter-lab-title">
+    <div class="filter-lab-heading">
+      <div><p class="lab-kicker">ONE-BIT COMPUTATION · YHSV MASKS</p><h2 id="filter-lab-title">Build two reusable binary scanlines.</h2></div>
+      <p>Each RGB565 pixel uses the same YHSV conversion as the embedded lookup table, then two predicates write independent <code>0</code> or <code>1</code> arrays. These are measurements; they do not choose a driving response.</p>
+    </div>
+    <section class="yhsv-live-panel" aria-labelledby="yhsv-live-title">
+      <div class="yhsv-live-heading">
+        <div>
+          <span>LIVE CONVERTED DATA</span>
+          <strong id="yhsv-live-title">Selected scanline · row <output id="yhsv-live-row">A (y = 150)</output></strong>
+        </div>
+        <p><i class="yhsv-key-v"></i> dark <code>V</code> condition <i class="yhsv-key-blue"></i> complete blue condition</p>
       </div>
-    </div>
-    <ol class="lab-step-strip">
-      <li data-step="1"><b>1</b><span>Read Y</span></li>
-      <li data-step="2"><b>2</b><span>Invert</span></li>
-      <li data-step="3"><b>3</b><span>Assign weights</span></li>
-      <li data-step="4"><b>4</b><span>Multiply</span></li>
-      <li data-step="5"><b>5</b><span>Reduce</span></li>
-    </ol>
-
-    <div class="lab-equation" aria-label="Center of mass equations">
-      <div><span>BLACK MASS</span><code>mass[x] = 255 − Y[x]</code></div>
-      <div><span>DOUBLED WEIGHT</span><code>weight2[x] = 2x − 319</code></div>
-      <div><span>CONTRIBUTION</span><code>mass[x] × weight2[x]</code></div>
-      <div><span>POSITION</span><code>Σ contribution ÷ (2 × Σ mass)</code></div>
-    </div>
-  </section>
-
-  <section class="lab-results" aria-label="Scanline calculation results">
-    <article class="result-a"><span>ROW A · TOTAL MASS</span><output id="lab-a-mass">—</output></article>
-    <article class="result-a"><span>ROW A · FIRST MOMENT</span><output id="lab-a-moment">—</output></article>
-    <article class="result-a"><span>ROW A · POSITION</span><output id="lab-a-position">—</output><small>pixels from image center</small></article>
-    <article class="result-b" hidden><span>ROW B · POSITION</span><output id="lab-b-position">—</output><small>pixels from image center</small></article>
-  </section>
-
-  <section class="lab-plots" aria-label="Selected scanline plots">
-    <article><div class="lab-card-heading"><span>ROW A</span><strong>Raw luma Y</strong></div><canvas id="lab-plot-a" width="640" height="150"></canvas></article>
-    <article id="lab-plot-b-card" hidden><div class="lab-card-heading"><span>ROW B</span><strong>Raw luma Y</strong></div><canvas id="lab-plot-b" width="640" height="150"></canvas></article>
-  </section>
-
-  <section class="worksheet-section" aria-labelledby="worksheet-title">
-    <div class="worksheet-heading">
-      <div><p class="lab-kicker">THE SPREADSHEET VIEW</p><h2 id="worksheet-title">Every column is one camera pixel.</h2></div>
-      <div id="selected-pixel-detail" class="selected-pixel-detail">Select a column to inspect one multiplication.</div>
-    </div>
-    <p class="worksheet-help">Scroll horizontally to inspect all 320 pixels. Point at any cell to highlight the same pixel throughout the worksheet.</p>
-    <div id="worksheet-scroll" class="worksheet-scroll" tabindex="0" aria-label="Scrollable 320-pixel computation worksheet">
-      <table id="scanline-worksheet">
-        <tbody>
-          <tr id="worksheet-x" data-stage="1"><th scope="row"><b>x</b><small>pixel coordinate</small></th></tr>
-          <tr id="worksheet-y" data-stage="1"><th scope="row"><b>Y[x]</b><small>raw luma</small></th></tr>
-          <tr id="worksheet-mass" data-stage="2"><th scope="row"><b>255 − Y</b><small>black mass</small></th></tr>
-          <tr id="worksheet-weight" data-stage="3"><th scope="row"><b>2x − 319</b><small>doubled weight</small></th></tr>
-          <tr id="worksheet-product" data-stage="4"><th scope="row"><b>mass × weight</b><small>contribution</small></th></tr>
-        </tbody>
-      </table>
+      <div id="yhsv-table-scroll" class="yhsv-table-scroll" tabindex="0" aria-label="Horizontally scrollable live YHSV scanline values">
+        <table id="yhsv-live-table">
+          <tbody>
+            <tr data-channel="y"><th scope="row">Y</th></tr>
+            <tr data-channel="h"><th scope="row">H</th></tr>
+            <tr data-channel="s"><th scope="row">S</th></tr>
+            <tr data-channel="v"><th scope="row">V</th></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="yhsv-table-help">Each column is one pixel, from <code>x=0</code> through <code>x=319</code>. Point at a cell to select that pixel in both mask plots.</p>
+    </section>
+    <div class="filter-lab-grid">
+      <article class="filter-output-card">
+        <p class="binary-output-key"><b>ONE-BIT KEY</b> Filled/color = <code>1</code> (predicate true) · white = <code>0</code> (predicate false)</p>
+        <div class="lab-card-heading"><span>OUTPUT ARRAY 1</span><strong id="filter-name">Black / dark mask</strong></div>
+        <code id="filter-expression" class="filter-expression">mask[x] = (V[x] &lt; 80) ? 1 : 0</code>
+        <canvas id="lab-filter-mask-plot" width="960" height="150" aria-label="Binary filter output across 320 scanline pixels"></canvas>
+        <div class="filter-readouts">
+          <output id="filter-match-count">0 / 320 pixels match</output>
+          <output id="black-edge-count" class="black-edge-count">0 black transitions</output>
+        </div>
+        <div class="filter-output-separator">
+          <div class="lab-card-heading"><span>OUTPUT ARRAY 2</span><strong>Blue token mask</strong></div>
+          <code id="blue-filter-expression" class="filter-expression">mask[x] = blue hue and minimum S/V ? 1 : 0</code>
+          <canvas id="lab-blue-filter-mask-plot" width="960" height="150" aria-label="Binary blue-filter output across 320 scanline pixels"></canvas>
+          <div class="filter-readouts">
+            <output id="blue-filter-match-count">0 / 320 pixels match</output>
+          </div>
+        </div>
+        <div class="student-edge-exercise">
+          <span>STUDENT TODO</span>
+          <strong>Turn black transitions into candidate line centers.</strong>
+          <code>candidate center = (entering edge + exiting edge) / 2</code>
+          <p>The red triangles mark every adjacent <code>0↔1</code> transition. Pair suitable edges, handle a line that touches an image boundary, and show every candidate before deciding what any candidate means.</p>
+        </div>
+        <pre id="filter-code" class="filter-code" aria-label="C-shaped two-mask and edge-count example"></pre>
+        <div class="filter-readouts selected-filter-readout">
+          <output id="filter-selected-detail">x=160 · waiting for frame</output>
+        </div>
+        <p class="filter-reference">The blue defaults begin at the supplied token’s dominant RGB <code>#0E42F1</code>: RGB565 <code>0x0A1E</code> → <code>Y=68 H=160 S=247 V=247</code>. Tune a range instead of testing one exact color.</p>
+        <ul class="filter-rationale">
+          <li><b>Black:</b> low <code>V</code> rejects a vivid blue that can have low luma but still has one strong color channel.</li>
+          <li><b>Blue:</b> circular hue distance handles the byte boundary, while minimum <code>S</code> and <code>V</code> reject gray and very dark pixels whose hue is unreliable.</li>
+          <li><b>Edges:</b> adjacent <code>0↔1</code> transitions expose boundaries without selecting or combining them for the student.</li>
+        </ul>
+      </article>
     </div>
   </section>
 
   <footer class="lab-future">
-    <div><span>NEXT REPRESENTATION</span><strong>Luma threshold</strong><p>Replace continuous mass with a black/white mask and observe what information is lost.</p></div>
-    <div><span>LATER</span><strong>H · S · V gates</strong><p>Use color measurements to form a mask, then feed that mask into the same weighted reduction.</p></div>
-    <div><span>LATER</span><strong>Edges and multiple rows</strong><p>Inspect transitions and compare measurements without prescribing a finished tracking strategy.</p></div>
+    <div><span>CONVERT</span><strong>RGB565 → byte YHSV</strong><p>Inspect the exact channel values used by the embedded lookup-table representation.</p></div>
+    <div><span>DECIDE</span><strong>Predicate → 0 or 1</strong><p>Observe what each threshold rejects, what it preserves, and how tuning changes the output array.</p></div>
+    <div><span>PRACTICE</span><strong>Pair black transitions</strong><p>Use the visible transition positions to calculate every candidate black-line center without prescribing which one is the track.</p></div>
   </footer>
 </section>
 <!-- __LAB_END__ -->

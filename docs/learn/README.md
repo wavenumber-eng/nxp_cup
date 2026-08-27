@@ -8,8 +8,13 @@ modes, frame dispatch, participant callbacks, safety gates, and the normal
 edit/build/flash loop; `frame-indexing.html` demonstrates row-major RGB565
 frame storage, C pointer indexing, row access, byte offsets, loops, bounds, and
 the callback lifetime. `camera_scanline_lab.html` preserves the original camera
-simulator in `camera_sim.html` while adding a staged luma, inverted-mass,
-signed-weight, first-moment, normalized-position, and two-scanline laboratory.
+simulator in `camera_sim.html` while adding a two-scanline, one-bit YHSV filtering
+laboratory. It shows raw luma plus separate adjustable dark and circular-hue blue
+binary arrays, using the same byte-scaled YHSV definitions, public API names, and
+`color_features_t` fields as the firmware. Its fixed 8 cm blue-token reference is
+positioned from the supplied top-down track bitmap. Red markers expose every
+adjacent transition in the dark mask, with a bounded student exercise for pairing
+edges into candidate line centers; no centroid computation is included.
 Each generated HTML file must open from `file://` without a server, network
 request, CDN, or companion asset.
 

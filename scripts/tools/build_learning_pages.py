@@ -116,15 +116,25 @@ def render_camera_scanline_lab() -> str:
 
     replacements = (
         ("<title>NXP Cup — Line-Camera Simulator</title>",
-         "<title>NXP Cup — Interactive Scanline Computation Lab</title>"),
+         "<title>NXP Cup — Interactive One-Bit Scanline Lab</title>"),
         ("</style>", f"\n{lab_css}\n</style>"),
-        ("<body>\n<div id=\"layout\">",
-         f"<body>\n{_fragment(fragment_source, 'TOOLBAR')}\n<div id=\"layout\">"),
+        ('  <div id="left">\n    <div id="overview"></div>',
+         '  <div id="left">\n' + _fragment(fragment_source, 'TOOLBAR') +
+         '\n    <div id="overview"></div>'),
+        ('      <h1>Line-Camera Simulator</h1>',
+         '      <div class="panel-title-row"><h1>Line-Camera Simulator</h1>' +
+         _fragment(fragment_source, "PANEL_LAB_BUTTON") + '</div>'),
         ('      <input id="row1" type="range" min="0" max="199" step="1" value="150">',
          '      <input id="row1" type="range" min="0" max="199" step="1" value="150">\n' +
-         _fragment(fragment_source, "SECOND_ROW_CONTROLS")),
-        ('    <canvas id="plot1" class="plot" width="640" height="130"></canvas>',
-         '    <canvas id="plot1" class="plot" width="640" height="130"></canvas>\n' +
+         _fragment(fragment_source, "SECOND_ROW_CONTROLS") + '\n' +
+         _fragment(fragment_source, "MAIN_FILTER_CONTROLS")),
+        ('    <h2>Raw scan-row Y profile (luma from RGB565, like the MCU LUT)</h2>\n'
+         '    <canvas id="plot1" class="plot" width="640" height="130"></canvas>',
+         '    <div id="rawPlotGroup" class="binary-plot-group">\n'
+         '      <h2>Raw scan-row Y profile (luma from RGB565, like the MCU LUT)</h2>\n'
+         '      <canvas id="plot1" class="plot" width="640" height="96"></canvas>\n'
+         '    </div>\n' +
+         _fragment(fragment_source, "MAIN_FILTER_PLOT") + '\n' +
          _fragment(fragment_source, "SECOND_PLOT")),
         ('// per-pixel inverse projection of the whole 320x240 frame (CPU, ~77k rays).',
          '// per-pixel inverse projection of the whole 320x200 frame (CPU, 64k rays).'),
