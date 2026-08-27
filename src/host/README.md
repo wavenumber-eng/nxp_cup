@@ -22,9 +22,9 @@ pwsh -NoProfile -File src/host/build.ps1
 
 LLVM-MinGW is the canonical Windows compiler installed by root
 `setup.ps1 -IncludeMaintainerTools`; macOS uses AppleClang. Ordinary students use
-the prebuilt runtime instead. The maintainer build produces the viewer and CLI,
-includes the pinned ROM programmer, and publishes a runnable bundle under
-`out/artifacts/host`.
+the pinned Windows runtime or the Mac runtime built locally by `./setup.sh`.
+The maintainer build produces the viewer and CLI, includes the pinned ROM
+programmer, and publishes a runnable bundle under `out/artifacts/host`.
 
 Useful commands:
 

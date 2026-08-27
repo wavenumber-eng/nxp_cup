@@ -28,11 +28,11 @@ code .
 .\out\artifacts\host\nxpc_viewer.exe
 ```
 
-On an Apple Silicon Mac, follow the Mac guide to install the unsigned viewer
-package, then use the same component scripts through PowerShell 7:
+On an Apple Silicon Mac, setup builds the host tools locally from pinned
+repository inputs, then the same component scripts run through PowerShell 7:
 
 ```sh
-./setup.sh -SkipCoreTools
+./setup.sh
 pwsh -NoProfile -File src/embedded/build.ps1
 pwsh -NoProfile -File src/embedded/flash.ps1
 open "out/artifacts/host/NXP Cup Viewer.app"

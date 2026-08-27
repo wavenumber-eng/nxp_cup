@@ -10,6 +10,8 @@ param(
     [ValidatePattern("^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")]
     [string]$Version = "0.0.0",
 
+    [string]$PublishDirectory = "",
+
     [switch]$ToolOnly
 )
 
@@ -97,8 +99,24 @@ if (-not $ToolOnly) {
 }
 Write-Host "CLI:    $(Join-Path $outputDir "nxpc_tool$executableSuffix")"
 
-$publishDir = Join-Path $repoRoot "out/artifacts/host"
 $programmerName = if ($runningOnMac) { "rblhost" } else { "rblhost.exe" }
+if ($runningOnMac -and (-not $ToolOnly)) {
+    $app = Join-Path $outputDir $viewerName
+    & codesign --force --options runtime --timestamp=none --sign - $app
+    if ($LASTEXITCODE -ne 0) {
+        throw "Ad-hoc codesign failed for $app with exit code $LASTEXITCODE"
+    }
+    & codesign --verify --deep --strict --verbose=2 $app
+    if ($LASTEXITCODE -ne 0) {
+        throw "Ad-hoc app signature verification failed with exit code $LASTEXITCODE"
+    }
+}
+
+$publishDir = if ([string]::IsNullOrWhiteSpace($PublishDirectory)) {
+    Join-Path $repoRoot "out/artifacts/host"
+} else {
+    $PublishDirectory
+}
 $runtimeFiles = if ($ToolOnly) {
     @("nxpc_tool$executableSuffix", $programmerName, "rblhost-LICENSE.txt")
 } else {

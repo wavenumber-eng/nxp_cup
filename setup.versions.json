@@ -39,7 +39,8 @@
     ],
     "macosArm64": {
       "available": false,
-      "reason": "The first immutable, Developer ID signed and notarized Mac release has not been published yet."
+      "localBuildVersion": "0.1.0",
+      "reason": "No immutable Mac binary release is pinned; setup builds the host tools from the repository's pinned sources instead."
     }
   },
   "requiredCommands": {

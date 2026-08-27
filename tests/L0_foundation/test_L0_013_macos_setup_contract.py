@@ -23,8 +23,9 @@ def test_macos_student_guide_uses_the_shared_workflow_and_bounded_permissions():
     normalized_guide = " ".join(guide.split())
     for expected in (
         "Apple Silicon (`arm64`)",
-        "./setup.sh -SkipCoreTools",
-        "shasum -a 256 -c",
+        "./setup.sh",
+        "builds the native viewer and CLI locally",
+        "No Apple account",
         "pwsh -NoProfile -File src/embedded/build.ps1",
         "pwsh -NoProfile -File src/embedded/flash.ps1",
         "-Backend Rom",
@@ -90,6 +91,8 @@ def test_shared_setup_has_mac_archive_and_package_manager_boundaries():
         "brew install --formula",
         "arm-none-eabi-gcc$ExecutableSuffix",
         "GetUnixFileMode",
+        "Install-LocalMacCoreTools",
+        "-PublishDirectory",
         "codesign --verify --deep --strict",
         "xcrun stapler validate",
     ):
@@ -144,8 +147,8 @@ def test_bootstrap_recovers_the_standard_apple_silicon_homebrew_path():
     assert "Setup Complete" in result.stdout
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS PowerShell")
-def test_unpublished_mac_runtime_requires_an_explicit_skip():
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires Apple Silicon host build")
+def test_unpublished_mac_runtime_builds_locally_without_release_credentials():
     result = subprocess.run(
         [
             "pwsh",
@@ -155,15 +158,17 @@ def test_unpublished_mac_runtime_requires_an_explicit_skip():
             "-SkipArm",
             "-SkipCMake",
             "-SkipNinja",
+            "-Force",
         ],
         cwd=REPO,
         text=True,
         capture_output=True,
         check=False,
-        timeout=30,
+        timeout=120,
     )
 
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stdout + result.stderr
     output = result.stdout + result.stderr
-    assert "not been published yet" in output
-    assert "Use -SkipCoreTools" in output
+    assert "core tools (local source build)" in output
+    assert "Built and installed local Apple Silicon core tools" in output
+    assert "selftest=ok" in output

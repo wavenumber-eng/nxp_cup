@@ -7,11 +7,13 @@
 
       1. Arm GNU Toolchain 14.2.Rel1 under out\toolchains
       2. CMake and Ninja through the native package manager when needed
-      3. The exact platform core-tools GitHub release under out\artifacts\host
+      3. Host tools under out\artifacts\host: the pinned Windows release or a
+         local Apple Silicon build from repository-pinned inputs
 
     Downloads are cached under out\downloads. A candidate toolchain or host runtime
-    is fully verified before it replaces an existing installation. Nothing is added
-    to a persistent PATH and no environment variables are persisted.
+    is fully verified before it replaces an existing installation. The local Mac
+    build requires no Apple signing identity or Rust toolchain. Nothing is added to
+    a persistent PATH and no environment variables are persisted.
 
     Maintainers who build the native host from source may explicitly add uv and
     LLVM-MinGW with -IncludeMaintainerTools.
@@ -53,6 +55,7 @@ $ToolsDir = Join-Path $OutDir "toolchains"
 $DownloadsDir = Join-Path $OutDir "downloads"
 $StagingDir = Join-Path $OutDir "staging"
 $HostDir = Join-Path $OutDir "artifacts\host"
+$HostBuildScript = Join-Path $RepoRoot "src/host/build.ps1"
 $VersionsPath = Join-Path $RepoRoot "setup.versions.json"
 
 if (-not (Test-Path -LiteralPath $VersionsPath -PathType Leaf)) {
@@ -646,8 +649,98 @@ function Test-CoreToolsDirectory {
     }
 }
 
+function Test-LocalMacCoreToolsDirectory {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+
+    $app = Join-Path $Directory "NXP Cup Viewer.app"
+    $executables = @(
+        (Join-Path $Directory "nxpc_tool"),
+        (Join-Path $Directory "rblhost"),
+        (Join-Path $app "Contents/MacOS/NXP Cup Viewer"),
+        (Join-Path $app "Contents/Resources/bin/rblhost")
+    )
+    foreach ($executable in $executables) {
+        if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+            throw "Locally built Mac runtime is missing $executable"
+        }
+        $mode = [System.IO.File]::GetUnixFileMode($executable)
+        if (($mode -band [System.IO.UnixFileMode]::UserExecute) -eq 0) {
+            throw "Executable mode is missing on $executable"
+        }
+        $architectures = (& /usr/bin/lipo -archs $executable 2>&1 | Out-String).Trim()
+        if (($LASTEXITCODE -ne 0) -or ($architectures -ne "arm64")) {
+            throw "Locally built Mac executable is not thin arm64: $executable ($architectures)"
+        }
+    }
+
+    & /usr/bin/codesign --verify --deep --strict --verbose=2 $app
+    if ($LASTEXITCODE -ne 0) {
+        throw "Locally built NXP Cup Viewer.app signature validation failed with exit code $LASTEXITCODE"
+    }
+    $bundleIdentifier = (& /usr/bin/plutil -extract CFBundleIdentifier raw -o - `
+        (Join-Path $app "Contents/Info.plist") 2>&1 | Out-String).Trim()
+    if (($LASTEXITCODE -ne 0) -or ($bundleIdentifier -ne "com.wavenumber.nxpc.viewer")) {
+        throw "Locally built viewer has an unexpected bundle identifier: $bundleIdentifier"
+    }
+
+    $programmerVersion = (& (Join-Path $Directory "rblhost") --version 2>&1 |
+        Out-String).Trim()
+    if (($LASTEXITCODE -ne 0) -or ($programmerVersion -ne "rblhost 0.2.0")) {
+        throw "Locally built runtime has an unexpected programmer version: $programmerVersion"
+    }
+    & (Join-Path $Directory "nxpc_tool") selftest
+    if ($LASTEXITCODE -ne 0) {
+        throw "Locally built nxpc_tool selftest failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Install-LocalMacCoreTools {
+    if (-not [string]::IsNullOrWhiteSpace($CoreToolsArchive)) {
+        throw "-CoreToolsArchive cannot be used until an immutable Mac binary release is pinned. Omit it to build the host tools locally."
+    }
+    if ([string]::IsNullOrWhiteSpace($CoreTools.localBuildVersion)) {
+        throw "The local Mac core-tools build version is missing from setup.versions.json."
+    }
+    if ((-not $Force) -and (Test-Path -LiteralPath $HostDir -PathType Container)) {
+        try {
+            Test-LocalMacCoreToolsDirectory -Directory $HostDir
+            Write-Host "  [SKIP] Verified locally built core tools: $HostDir" -ForegroundColor DarkGray
+            return
+        } catch {
+            Write-Warning "Existing local Mac host runtime is not usable: $_"
+        }
+    }
+
+    Assert-UsableCommand -DisplayName "Xcode Command Line Tools" -Command "clang++"
+    if (-not (Test-Path -LiteralPath $HostBuildScript -PathType Leaf)) {
+        throw "Mac host build entry point is missing: $HostBuildScript"
+    }
+    New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
+    $candidate = Join-Path $StagingDir "core-tools-local-$PID"
+    Remove-SetupPath -LiteralPath $candidate
+    try {
+        Write-Host "  Building the Mac viewer and CLI from pinned repository inputs..." -ForegroundColor White
+        & $HostBuildScript -Configuration Release -Toolchain Clang `
+            -Version $CoreTools.localBuildVersion -PublishDirectory $candidate
+        if ($LASTEXITCODE -ne 0) {
+            throw "Mac host build failed with exit code $LASTEXITCODE"
+        }
+        Test-LocalMacCoreToolsDirectory -Directory $candidate
+        New-Item -ItemType Directory -Path (Split-Path -Parent $HostDir) -Force | Out-Null
+        Switch-SetupDirectory -Candidate $candidate -Destination $HostDir `
+            -PreserveDirectories @("packages")
+    } finally {
+        Remove-SetupPath -LiteralPath $candidate
+    }
+    Write-Host "  [OK] Built and installed local Apple Silicon core tools" -ForegroundColor Green
+}
+
 function Install-CoreTools {
     if (-not $CoreToolsAvailable) {
+        if ($RunningOnMac) {
+            Install-LocalMacCoreTools
+            return
+        }
         $reason = if (($null -ne $CoreTools) -and $CoreTools.reason) {
             $CoreTools.reason
         } else {
@@ -743,6 +836,8 @@ if ($SkipNinja) {
 Write-Host ""
 $coreToolsLabel = if ($CoreToolsAvailable) {
     "Pinned $platformDisplayName core tools $($CoreTools.releaseVersion)"
+} elseif ($RunningOnMac) {
+    "$platformDisplayName core tools (local source build)"
 } else {
     "$platformDisplayName core tools (release pin pending)"
 }

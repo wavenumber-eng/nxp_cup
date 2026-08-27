@@ -14,53 +14,34 @@ You need:
 - an Apple Silicon Mac with an internet connection;
 - [Homebrew](https://brew.sh/);
 - this repository downloaded or cloned locally;
-- the organizer-provided `nxp-cup-core-tools-macos-arm64-0.1.0.zip` and matching
-  `.zip.sha256` file; and
 - a data-capable USB cable connected to **J11** on the FRDM-MCXN947.
 
 Open Terminal, change to the repository root, and run all commands below from
 that directory unless a step says otherwise.
 
-## 1. Install the firmware build tools
-
-The current preview viewer ZIP does not yet have a stable public URL pinned in
-`setup.versions.json`, so explicitly skip that download while installing the
-firmware toolchain:
+## 1. Install the build and host tools
 
 ```sh
-./setup.sh -SkipCoreTools
+./setup.sh
 ```
 
 The script installs PowerShell through Homebrew if necessary, downloads and
 verifies Arm GNU Toolchain 14.2.Rel1 under `out/toolchains`, and checks CMake and
-Ninja. It is safe to rerun and does not modify shell profiles or persist PATH
-changes.
+Ninja. It then builds the native viewer and CLI locally from the pinned SDL,
+Dear ImGui, and `rblhost` inputs committed to the repository. No Apple account,
+Developer ID certificate, notarization, Rust, or MCUXpresso installation is
+required.
 
-## 2. Install the unsigned viewer package
-
-First verify the ZIP in the directory containing both downloaded files. For
-example, if they are in Downloads:
-
-```sh
-(cd ~/Downloads && shasum -a 256 -c nxp-cup-core-tools-macos-arm64-0.1.0.zip.sha256)
-```
-
-Continue only when the result says `OK`. Extract the package into the normal
-repository artifact location:
+Setup stages and validates the local host build before installing it under
+`out/artifacts/host`. It is safe to rerun, does not modify shell profiles or
+persist PATH changes, and should finish with `Setup Complete`. Confirm the host
+self-test if needed:
 
 ```sh
-mkdir -p out/artifacts/host
-ditto -x -k ~/Downloads/nxp-cup-core-tools-macos-arm64-0.1.0.zip out/artifacts/host
 out/artifacts/host/nxpc_tool selftest
 ```
 
-The package has no Apple Developer ID and is not notarized. On first launch,
-macOS may block it. Try opening it once, then go to **System Settings > Privacy
-& Security**, scroll to **Security**, and choose **Open Anyway** for NXP Cup
-Viewer. Authenticate and confirm **Open**. Only approve a package after its
-checksum has passed.
-
-## 3. Build the competition firmware
+## 2. Build the competition firmware
 
 ```sh
 pwsh -NoProfile -File src/embedded/build.ps1
@@ -77,7 +58,7 @@ For a clean rebuild, add `-Clean`:
 pwsh -NoProfile -File src/embedded/build.ps1 -Clean
 ```
 
-## 4. Connect, inspect, and flash the car
+## 3. Connect, inspect, and flash the car
 
 Connect the board's **J11** port. macOS may ask whether to allow the USB
 accessory; approve the board connection. Confirm that exactly one runtime device
@@ -115,7 +96,7 @@ If the running firmware cannot enter ROM mode:
 
 This recovery does not require J-Link.
 
-## 5. Open the viewer
+## 4. Open the viewer
 
 ```sh
 open "out/artifacts/host/NXP Cup Viewer.app"
@@ -134,13 +115,14 @@ pwsh -NoProfile -File src/embedded/flash.ps1
 open "out/artifacts/host/NXP Cup Viewer.app"
 ```
 
-## Rebuild the Mac viewer from source (maintainers)
+## Rebuild or package the Mac viewer (maintainers)
 
-Students use the prebuilt ZIP. A maintainer changing native host code can set up
-the additional build tools and rebuild the app with:
+Ordinary setup already builds the host locally. A maintainer changing native
+host code can install the optional repository test tools and rebuild the app
+with:
 
 ```sh
-./setup.sh -SkipCoreTools -IncludeMaintainerTools
+./setup.sh -IncludeMaintainerTools
 pwsh -NoProfile -File src/host/build.ps1
 out/artifacts/host/nxpc_tool selftest
 ```
@@ -153,6 +135,11 @@ pwsh -NoProfile -File src/host/package.ps1 -Version 0.1.0 -SigningIdentity -
 ```
 
 The ZIP and checksum are written under `out/artifacts/host/packages`.
+Downloaded copies have no Apple Developer ID and are not notarized. Verify the
+separate checksum before opening one. If macOS blocks its first launch, try to
+open it once, then go to **System Settings > Privacy & Security**, scroll to
+**Security**, and choose **Open Anyway** for NXP Cup Viewer. Authenticate and
+confirm **Open**. Do not disable Gatekeeper globally.
 
 ## Troubleshooting
 
@@ -161,7 +148,7 @@ The ZIP and checksum are written under `out/artifacts/host/packages`.
   J11, reconnect it, and rerun `nxpc_tool devices`.
 - If more than one matching board is connected, disconnect the extra board; the
   tools deliberately refuse to guess.
-- If the app is blocked after download, use the bounded **Open Anyway** process
-  above. Do not disable Gatekeeper globally.
+- If a packaged copy is blocked after download, use the bounded **Open Anyway**
+  process above.
 - If flashing cannot reach the application, use the physical ROM recovery
   sequence.
