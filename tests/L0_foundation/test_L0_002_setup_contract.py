@@ -317,8 +317,15 @@ def test_android_build_uses_provisioned_gradle_and_supports_offline_builds():
     assert '"--offline"' in text
 
 
-def test_android_relay_viewer_has_prominent_video_mode_controls():
+def test_android_uses_only_the_generated_f1_relay_viewer():
     viewer = ANDROID_RELAY_VIEWER.read_text(encoding="utf-8")
+    raw_html = sorted(ANDROID_RELAY_VIEWER.parent.glob("*.html"))
+    assert raw_html == [ANDROID_RELAY_VIEWER]
+    assert not (ANDROID_RELAY_VIEWER.parent / "f1_relay_viewer.html").exists()
+    assert "NXP Cup Live Dashboard" in viewer
+    assert 'data-transport="relay"' in viewer
+    assert "NXP Cup Camera Relay" not in viewer
+    assert 'class="side-readouts"' in viewer
     assert "aspect-ratio: 8 / 5" in viewer
     for mode in ("jpeg", "h264", "raw"):
         assert f'data-video="{mode}"' in viewer

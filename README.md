@@ -4,6 +4,8 @@ This repository contains the organizer-supplied NXP Cup platform used at FIT:
 MCXN947 firmware, Windows/macOS/browser host tools, an Android telemetry relay, shared
 libraries, tests, and teaching material.
 
+The current integrated platform release is **1.0.0**.
+
 ## Start here
 
 Students: choose the authoritative setup guide for the computer you are using:
@@ -16,6 +18,10 @@ the viewer, permissions, and physical recovery.
 
 After setup, use **[Building the Code](docs/building-the-code.html)** for the
 short, repeatable edit, build, flash, and viewer workflow.
+
+To understand where student code belongs and how frames, modes, callbacks, and
+safety gates fit together, open the self-contained
+**[How the Firmware Runs](docs/learn/framework-structure.html)** lesson.
 
 The normal path, run from a PowerShell tab in **Windows Terminal** at the
 repository root, is:

@@ -11,6 +11,10 @@ import com.wavenumber.nxpc.bridge.protocol.NxpCupPacket
 import com.wavenumber.nxpc.bridge.protocol.NxpCupPayloadDecoder
 import com.wavenumber.nxpc.bridge.protocol.NxpCupProtocol
 import com.wavenumber.nxpc.bridge.protocol.NxpCupStreamParser
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemAction
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionOutcome
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionRequestStatus
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionResult
 import com.wavenumber.nxpc.bridge.video.NxpCupFrameAssembler
 import com.wavenumber.nxpc.bridge.video.NxpCupVideoFrame
 import com.wavenumber.nxpc.bridge.video.LatestFrameMailbox
@@ -44,6 +48,7 @@ data class NxpCupUsbHealth(
     val statsReports: Long = 0,
     val logRecords: Long = 0,
     val telemetryRecords: Long = 0,
+    val capabilities: Long = 0,
 )
 
 class NxpCupUsbSession(
@@ -51,6 +56,7 @@ class NxpCupUsbSession(
     private val onHealth: (NxpCupUsbHealth) -> Unit,
     private val onCompletedFrame: ((NxpCupVideoFrame) -> Unit)? = null,
     private val onDiagnosticPacket: ((NxpCupPacket) -> Unit)? = null,
+    private val onSystemActionResult: ((NxpCupSystemActionResult) -> Unit)? = null,
 ) {
     companion object {
         const val NXPC_VENDOR_ID = 0x1FC9
@@ -69,6 +75,11 @@ class NxpCupUsbSession(
     private var stopRequested = false
     @Volatile
     private var worker: Thread? = null
+    @Volatile
+    private var streaming = false
+    @Volatile
+    private var capabilities = 0L
+    private val actionQueue = NxpCupSystemActionQueue()
 
     fun start(device: UsbDevice) {
         if (worker?.isAlive == true) return
@@ -80,6 +91,23 @@ class NxpCupUsbSession(
     fun stop() {
         stopRequested = true
         worker?.interrupt()
+    }
+
+    fun requestSystemAction(action: NxpCupSystemAction): NxpCupSystemActionRequestStatus {
+        if (!streaming || capabilities and NxpCupProtocol.CAPABILITY_SYSTEM_ACTIONS.toLong() == 0L) {
+            return NxpCupSystemActionRequestStatus.UNAVAILABLE
+        }
+        val offer = actionQueue.offer(action)
+        offer.superseded?.let {
+            onSystemActionResult?.invoke(
+                NxpCupSystemActionResult(
+                    it,
+                    NxpCupSystemActionOutcome.SUPERSEDED,
+                    "replaced by STOP before USB delivery",
+                ),
+            )
+        }
+        return offer.status
     }
 
     fun takeLatestFrame(): NxpCupVideoFrame? = mailbox.takeLatest()
@@ -154,15 +182,20 @@ class NxpCupUsbSession(
                 arg0: Int = 0,
                 arg1: Int = 0,
                 allowWhileStopping: Boolean = false,
+                reportProgress: Boolean = true,
+                requireOk: Boolean = true,
             ): NxpCupPacket {
-                report(
-                    NxpCupUsbHealth(
-                        state,
-                        "request=0x%08X sequence=$sequence".format(messageId),
-                        parser.parsedPackets,
-                        receivedBytes,
-                    ),
-                )
+                if (reportProgress) {
+                    report(
+                        NxpCupUsbHealth(
+                            state,
+                            "request=0x%08X sequence=$sequence".format(messageId),
+                            parser.parsedPackets,
+                            receivedBytes,
+                            capabilities = capabilities,
+                        ),
+                    )
+                }
                 val request = NxpCupControlPacketBuilder.build(sequence, messageId, arg0, arg1)
                 val written = connection.bulkTransfer(endpoints.bulkOut, request, request.size, 1_000)
                 check(written == request.size) { "short USB write: $written/${request.size}" }
@@ -177,7 +210,7 @@ class NxpCupUsbSession(
                             packet.header.flags and NxpCupProtocol.FLAG_RESPONSE != 0
                         ) {
                             iterator.remove()
-                            check(packet.header.arg1 == 0) {
+                            check(!requireOk || packet.header.arg1 == NxpCupProtocol.CONTROL_STATUS_OK) {
                                 "control status ${packet.header.arg1} for 0x%08X".format(messageId)
                             }
                             return packet
@@ -188,7 +221,12 @@ class NxpCupUsbSession(
                 error("timed out waiting for 0x%08X sequence=$sequence".format(messageId))
             }
 
-            val helloPacket = exchange(NxpCupUsbState.HELLO, 0, NxpCupProtocol.MSG_CONTROL_HELLO)
+            var controlSequence = 0
+            val helloPacket = exchange(
+                NxpCupUsbState.HELLO,
+                controlSequence++,
+                NxpCupProtocol.MSG_CONTROL_HELLO,
+            )
             val hello = NxpCupPayloadDecoder.hello(helloPacket.payload)
             check(hello.frameWidth == FRAME_WIDTH && hello.frameHeight == FRAME_HEIGHT) {
                 "unsupported frame geometry ${hello.frameWidth}x${hello.frameHeight}"
@@ -199,25 +237,79 @@ class NxpCupUsbSession(
             check(hello.sessionId == (helloPacket.header.arg2.toLong() and 0xFFFF_FFFFL)) {
                 "HELLO session IDs disagree"
             }
+            capabilities = hello.capabilities
 
             val channels = NxpCupProtocol.CHANNEL_FRAMES or NxpCupProtocol.CHANNEL_STATS or
                 NxpCupProtocol.CHANNEL_LOGS or NxpCupProtocol.CHANNEL_TELEMETRY
             exchange(
                 NxpCupUsbState.CHANNELS,
-                1,
+                controlSequence++,
                 NxpCupProtocol.MSG_CONTROL_SET_CHANNELS,
                 arg0 = channels,
                 arg1 = 0,
             )
-            exchange(NxpCupUsbState.PING, 2, NxpCupProtocol.MSG_CONTROL_PING)
+            exchange(NxpCupUsbState.PING, controlSequence++, NxpCupProtocol.MSG_CONTROL_PING)
             parser.beginSequenceWindow()
 
             var lastReportNs = System.nanoTime()
             var lastReportBytes = receivedBytes
             var lastReportFrames = assembler.completedFrames
-            report(NxpCupUsbHealth(NxpCupUsbState.STREAMING, "camera subscription active", sessionId = hello.sessionId))
+            streaming = true
+            report(
+                NxpCupUsbHealth(
+                    NxpCupUsbState.STREAMING,
+                    "camera subscription active",
+                    sessionId = hello.sessionId,
+                    capabilities = capabilities,
+                ),
+            )
             while (!stopRequested) {
                 readOnce()
+                takePendingAction()?.let { action ->
+                    val result = try {
+                        val response = exchange(
+                            NxpCupUsbState.STREAMING,
+                            controlSequence++,
+                            NxpCupProtocol.MSG_CONTROL_SYSTEM_ACTION,
+                            arg0 = action.protocolValue,
+                            arg1 = action.confirmation,
+                            reportProgress = false,
+                            requireOk = false,
+                        )
+                        when (response.header.arg1) {
+                            NxpCupProtocol.CONTROL_STATUS_OK ->
+                                NxpCupSystemActionResult(
+                                    action,
+                                    NxpCupSystemActionOutcome.ACCEPTED,
+                                    "firmware accepted the action",
+                                )
+                            NxpCupProtocol.CONTROL_STATUS_NOT_READY ->
+                                NxpCupSystemActionResult(
+                                    action,
+                                    NxpCupSystemActionOutcome.NOT_READY,
+                                    "camera is not ready",
+                                )
+                            NxpCupProtocol.CONTROL_STATUS_DENIED ->
+                                NxpCupSystemActionResult(
+                                    action,
+                                    NxpCupSystemActionOutcome.DENIED,
+                                    "firmware state machine denied the action",
+                                )
+                            else -> NxpCupSystemActionResult(
+                                action,
+                                NxpCupSystemActionOutcome.FAILED,
+                                "firmware returned control status ${response.header.arg1}",
+                            )
+                        }
+                    } catch (error: Throwable) {
+                        NxpCupSystemActionResult(
+                            action,
+                            NxpCupSystemActionOutcome.FAILED,
+                            error.message ?: error.javaClass.simpleName,
+                        )
+                    }
+                    onSystemActionResult?.invoke(result)
+                }
                 val nowNs = System.nanoTime()
                 if (nowNs - lastReportNs < HEALTH_PERIOD_NS) continue
                 val elapsedSeconds = (nowNs - lastReportNs).toDouble() / 1_000_000_000.0
@@ -240,6 +332,7 @@ class NxpCupUsbSession(
                         statsReports = statsReports,
                         logRecords = logRecords,
                         telemetryRecords = telemetryRecords,
+                        capabilities = capabilities,
                     ),
                 )
                 lastReportNs = nowNs
@@ -253,13 +346,13 @@ class NxpCupUsbSession(
 
             exchange(
                 NxpCupUsbState.CLOSING,
-                3,
+                controlSequence++,
                 NxpCupProtocol.MSG_CONTROL_SET_CHANNELS,
                 allowWhileStopping = true,
             )
             exchange(
                 NxpCupUsbState.CLOSING,
-                4,
+                controlSequence++,
                 NxpCupProtocol.MSG_CONTROL_CLOSE,
                 allowWhileStopping = true,
             )
@@ -271,6 +364,7 @@ class NxpCupUsbSession(
                     receivedBytes,
                     hello.sessionId,
                     assembler.completedFrames,
+                    capabilities = capabilities,
                 ),
             )
         } catch (error: Throwable) {
@@ -280,6 +374,9 @@ class NxpCupUsbSession(
                 report(NxpCupUsbHealth(NxpCupUsbState.ERROR, error.message ?: error.javaClass.simpleName))
             }
         } finally {
+            streaming = false
+            capabilities = 0
+            clearPendingAction()
             assembler.abortActive()
             dataInterface?.let { connection?.releaseInterface(it) }
             connection?.close()
@@ -321,6 +418,21 @@ class NxpCupUsbSession(
         val lineCoding1152008N1 = byteArrayOf(0x00, 0xC2.toByte(), 0x01, 0x00, 0x00, 0x00, 0x08)
         connection.controlTransfer(0x21, 0x20, 0, controlInterface.id, lineCoding1152008N1, 7, 1_000)
         connection.controlTransfer(0x21, 0x22, 3, controlInterface.id, null, 0, 1_000)
+    }
+
+    private fun takePendingAction(): NxpCupSystemAction? = actionQueue.poll()
+
+    private fun clearPendingAction() {
+        val action = actionQueue.clear()
+        action?.let {
+            onSystemActionResult?.invoke(
+                NxpCupSystemActionResult(
+                    it,
+                    NxpCupSystemActionOutcome.UNAVAILABLE,
+                    "USB session ended before delivery",
+                ),
+            )
+        }
     }
 
     private fun report(health: NxpCupUsbHealth) = onHealth(health)

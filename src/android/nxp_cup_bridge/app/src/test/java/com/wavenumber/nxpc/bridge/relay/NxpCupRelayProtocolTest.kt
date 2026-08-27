@@ -1,5 +1,8 @@
 package com.wavenumber.nxpc.bridge.relay
 
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemAction
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionOutcome
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionResult
 import com.wavenumber.nxpc.bridge.video.NxpCupJpegFrameView
 import com.wavenumber.nxpc.bridge.video.NxpCupVideoFrame
 import java.nio.ByteBuffer
@@ -10,6 +13,45 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NxpCupRelayProtocolTest {
+    @Test
+    fun relayAcceptsOnlyTheTwoTypedSystemActionCommands() {
+        assertEquals(
+            NxpCupSystemAction.RACE_START,
+            NxpCupRelayProtocol.decodeSystemActionCommand(
+                "{\"type\":\"system_action\",\"action\":\"race_start\"}".toByteArray(),
+            ),
+        )
+        assertEquals(
+            NxpCupSystemAction.STOP,
+            NxpCupRelayProtocol.decodeSystemActionCommand(
+                "{\"type\":\"system_action\",\"action\":\"stop\"}".toByteArray(),
+            ),
+        )
+        assertEquals(
+            null,
+            NxpCupRelayProtocol.decodeSystemActionCommand(
+                "{\"type\":\"system_action\",\"action\":\"start_motors\"}".toByteArray(),
+            ),
+        )
+    }
+
+    @Test
+    fun systemActionResultIsBoundedJsonText() {
+        val encoded = NxpCupRelayProtocol.encodeSystemActionResult(
+            NxpCupSystemActionResult(
+                NxpCupSystemAction.STOP,
+                NxpCupSystemActionOutcome.FAILED,
+                "bad \"status\"\nretry",
+            ),
+        ).toString(Charsets.UTF_8)
+
+        assertEquals(
+            "{\"type\":\"system_action_result\",\"action\":\"stop\",\"outcome\":\"failed\"," +
+                "\"detail\":\"bad \\\"status\\\"\\nretry\"}",
+            encoded,
+        )
+    }
+
     @Test
     fun relayModesParseClientWireNames() {
         assertEquals(NxpCupRelayVideoMode.RAW, NxpCupRelayVideoMode.parse("raw"))

@@ -1,7 +1,7 @@
 {
   "name": "nxp-cup-host-tests",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "scripts": {
     "build:standalone": "node ./tools/run-powershell.js ./tools/build-web.ps1",
     "check:dashboard": "node ./tools/run-powershell.js ../web/build.ps1 -Check",

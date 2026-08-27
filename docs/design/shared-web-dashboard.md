@@ -25,7 +25,9 @@ USB identities, relay framing, queue bounds, or Android lifecycle behavior.
 
 The shared source set contains the completed Formula One presentation. The Android
 adapter preserves the proven JPEG, fragmented MP4 H.264, raw RGB565, generic telemetry,
-and video-mode behavior without importing WebSerial or vehicle actions.
+video-mode behavior, and typed Race Start/Stop forwarding without importing WebSerial.
+The generated `relay_viewer.html` is the sole Android HTML resource; no legacy or
+parallel hand-authored presentation is packaged.
 
 ## Source ownership
 
@@ -73,12 +75,14 @@ Do not move these concerns into shared presentation code:
 - Web Serial discovery, port ownership, `AVCU` parsing, HELLO/channel/PING/CLOSE, typed
   race actions, direct RGB565 chunk assembly, or serial reconnect behavior;
 - WebSocket setup, `/stream` URL selection, JPEG `AVCJ`, fragmented MP4 `AVC4`, raw
-  `AVCR`, relayed `AVCU`, Media Source Extensions lifecycle, or mode replacement;
+  `AVCR`, relayed `AVCU`, typed race-action forwarding, Media Source Extensions
+  lifecycle, or mode replacement;
 - Android USB, encoder, mailbox, server, network, foreground-service, or watchdog code.
 
-The WebSerial adapter can expose connection and safe race controls. The relay adapter is
-read-only with respect to the vehicle and exposes JPEG/H.264/raw selection. Hiding an
-unsupported control is preferable to giving shared UI code transport knowledge.
+Both adapters may expose the same capability- and telemetry-gated Race Start and Stop
+controls. The relay adapter owns its bounded browser-to-USB action path as well as
+JPEG/H.264/raw selection; it exposes no general actuator or vehicle-mode command. Hiding
+an unsupported control is preferable to giving shared UI code transport knowledge.
 
 ## Android application roles
 

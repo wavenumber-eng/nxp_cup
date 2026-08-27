@@ -22,11 +22,12 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionRequestStatus
+import com.wavenumber.nxpc.bridge.relay.NxpCupRelayServer
+import com.wavenumber.nxpc.bridge.relay.NxpCupRelayVideoMode
 import com.wavenumber.nxpc.bridge.usb.NxpCupUsbHealth
 import com.wavenumber.nxpc.bridge.usb.NxpCupUsbSession
 import com.wavenumber.nxpc.bridge.usb.NxpCupUsbState
-import com.wavenumber.nxpc.bridge.relay.NxpCupRelayServer
-import com.wavenumber.nxpc.bridge.relay.NxpCupRelayVideoMode
 import com.wavenumber.nxpc.bridge.video.NxpCupCodecInventory
 import com.wavenumber.nxpc.bridge.video.NxpCupCompressionMode
 import com.wavenumber.nxpc.bridge.video.NxpCupCompressionProbe
@@ -116,6 +117,13 @@ class MainActivity : Activity() {
             port = intent.getIntExtra("relay_port", 8765),
             defaultVideoMode = relayVideoMode,
             onVideoModeChanged = ::selectRelayVideoMode,
+            onSystemActionRequested = { action ->
+                if (::session.isInitialized) {
+                    session.requestSystemAction(action)
+                } else {
+                    NxpCupSystemActionRequestStatus.UNAVAILABLE
+                }
+            },
         )
         selectRelayVideoMode(relayVideoMode)
         relayServer.start()
@@ -126,14 +134,15 @@ class MainActivity : Activity() {
             avcEncoders.forEach { Log.i("NXPC_CODEC_INVENTORY", NxpCupCodecInventory.logLine(it)) }
         }
         session = NxpCupUsbSession(
-            usbManager,
-            ::showHealth,
-            { frame ->
+            usbManager = usbManager,
+            onHealth = ::showHealth,
+            onCompletedFrame = { frame ->
                 relayServer.noteSourceFrame(frame.frameId)
                 relayServer.offerRawFrame(frame)
                 compressionProbe?.offerFrame(frame)
             },
-            relayServer::offerDiagnostic,
+            onDiagnosticPacket = relayServer::offerDiagnostic,
+            onSystemActionResult = relayServer::offerSystemActionResult,
         )
         previewView = ImageView(this).apply {
             setImageBitmap(previewBitmap)

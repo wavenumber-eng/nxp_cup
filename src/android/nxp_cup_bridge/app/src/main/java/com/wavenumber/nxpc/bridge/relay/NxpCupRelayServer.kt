@@ -2,6 +2,9 @@ package com.wavenumber.nxpc.bridge.relay
 
 import com.wavenumber.nxpc.bridge.protocol.NxpCupPacket
 import com.wavenumber.nxpc.bridge.protocol.NxpCupProtocol
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemAction
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionRequestStatus
+import com.wavenumber.nxpc.bridge.protocol.NxpCupSystemActionResult
 import com.wavenumber.nxpc.bridge.usb.NxpCupUsbHealth
 import com.wavenumber.nxpc.bridge.usb.NxpCupUsbState
 import com.wavenumber.nxpc.bridge.video.NxpCupJpegFrameView
@@ -43,6 +46,9 @@ class NxpCupRelayServer(
     private val port: Int = 8765,
     private val defaultVideoMode: NxpCupRelayVideoMode = NxpCupRelayVideoMode.JPEG,
     private val onVideoModeChanged: (NxpCupRelayVideoMode) -> Unit = {},
+    private val onSystemActionRequested: (NxpCupSystemAction) -> NxpCupSystemActionRequestStatus = {
+        NxpCupSystemActionRequestStatus.UNAVAILABLE
+    },
 ) {
     companion object {
         private const val MAX_HTTP_HEADER_BYTES = 8 * 1024
@@ -50,12 +56,15 @@ class NxpCupRelayServer(
         private const val CLIENT_POLL_TIMEOUT_MS = 5
         private const val SEND_DEADLINE_NS = 2_000_000_000L
         private const val SEND_WATCHDOG_PERIOD_MS = 100L
+        private const val ACTION_RESULT_CAPACITY = 8
         private const val WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     }
 
     private val mailbox = NxpCupRelayMailbox(maxFrameBytes = 320 * 200 * 4)
     private val h264Mailbox = NxpCupH264RelayMailbox()
     private val clientLock = Any()
+    private val actionResultLock = Any()
+    private val actionResults = ArrayDeque<NxpCupSystemActionResult>()
 
     @Volatile
     private var running = false
@@ -115,6 +124,13 @@ class NxpCupRelayServer(
 
     fun updateUsbHealth(health: NxpCupUsbHealth) {
         usbHealth = health
+    }
+
+    fun offerSystemActionResult(result: NxpCupSystemActionResult) {
+        synchronized(actionResultLock) {
+            if (actionResults.size == ACTION_RESULT_CAPACITY) actionResults.removeFirst()
+            actionResults.addLast(result)
+        }
     }
 
     fun localUrl(): String = "http://${relayIpv4Address() ?: "127.0.0.1"}:$port/"
@@ -222,6 +238,7 @@ class NxpCupRelayServer(
             selectVideoMode(videoMode)
             if (videoMode == NxpCupRelayVideoMode.H264) h264Mailbox.resetForViewer()
             mailbox.setClients(1)
+            synchronized(actionResultLock) { actionResults.clear() }
         }
 
         try {
@@ -269,7 +286,8 @@ class NxpCupRelayServer(
                         videoMode == NxpCupRelayVideoMode.JPEG || videoMode == NxpCupRelayVideoMode.RAW
                     ) mailbox.takeLatestFrame() else null
                     val h264Packet = if (videoMode == NxpCupRelayVideoMode.H264) h264Mailbox.takePacket() else null
-                    if (diagnostics.isNotEmpty() || frame != null || h264Packet != null) {
+                    val actionMessages = takeSystemActionResults(4)
+                    if (diagnostics.isNotEmpty() || frame != null || h264Packet != null || actionMessages.isNotEmpty()) {
                         var frameSent = false
                         outboundWriteStartedNs.set(System.nanoTime())
                         try {
@@ -278,6 +296,13 @@ class NxpCupRelayServer(
                                     output,
                                     0x2,
                                     NxpCupRelayProtocol.encodeDiagnostic(packet, relaySequence++),
+                                )
+                            }
+                            actionMessages.forEach { result ->
+                                writeWebSocketFrame(
+                                    output,
+                                    0x1,
+                                    NxpCupRelayProtocol.encodeSystemActionResult(result),
                                 )
                             }
                             if (frame != null) {
@@ -332,6 +357,7 @@ class NxpCupRelayServer(
         val second = input.read()
         if (second < 0) return false
         val opcode = first and 0x0F
+        val finalFrame = first and 0x80 != 0
         val masked = second and 0x80 != 0
         var length = second and 0x7F
         if (length == 126) {
@@ -342,7 +368,7 @@ class NxpCupRelayServer(
             if (extended > MAX_CLIENT_PAYLOAD_BYTES) return false
             length = extended.toInt()
         }
-        if (!masked || length > MAX_CLIENT_PAYLOAD_BYTES) return false
+        if (!finalFrame || !masked || length > MAX_CLIENT_PAYLOAD_BYTES) return false
         val mask = ByteArray(4)
         readFully(input, mask)
         val payload = ByteArray(length)
@@ -355,9 +381,32 @@ class NxpCupRelayServer(
                 output.flush()
                 true
             }
+            0x1 -> {
+                val action = NxpCupRelayProtocol.decodeSystemActionCommand(payload) ?: return false
+                val requestStatus = onSystemActionRequested(action)
+                val detail = when (requestStatus) {
+                    NxpCupSystemActionRequestStatus.QUEUED -> "queued for USB delivery"
+                    NxpCupSystemActionRequestStatus.BUSY -> "another system action is pending"
+                    NxpCupSystemActionRequestStatus.UNAVAILABLE -> "USB system actions are unavailable"
+                }
+                writeWebSocketFrame(
+                    output,
+                    0x1,
+                    NxpCupRelayProtocol.encodeSystemActionStatus(action, requestStatus.wireName, detail),
+                )
+                output.flush()
+                true
+            }
             else -> true
         }
     }
+
+    private fun takeSystemActionResults(maxCount: Int): List<NxpCupSystemActionResult> =
+        synchronized(actionResultLock) {
+            val results = ArrayList<NxpCupSystemActionResult>(minOf(maxCount, actionResults.size))
+            repeat(minOf(maxCount, actionResults.size)) { results.add(actionResults.removeFirst()) }
+            results
+        }
 
     private fun readHttpRequest(input: InputStream): HttpRequest? {
         val bytes = ByteArrayOutputStream()
@@ -448,7 +497,7 @@ class NxpCupRelayServer(
         } else {
             0.0
         }
-        return """{"state":"${usb.state.wireName}","session_id":${usb.sessionId},"usb_frames":${usb.frames},"usb_fps":${format(usb.framesPerSecond)},"usb_mib_s":${format(usb.mebibytesPerSecond)},"sequence_errors":${usb.sequenceErrors},"malformed_chunks":${usb.malformedChunks},"relay_mode":"${activeVideoMode.wireName}","relay_source_frames":${relay.sourceFrames},"relay_selected_frames":${relay.selectedFrames},"relay_sent_frames":${relay.sentFrames},"relay_sent_bytes":${relay.sentBytes},"relay_mbit_s":${format(relayMegabitsPerSecond)},"relay_last_sent_age_ms":${format(lastSentAgeMs)},"relay_dropped_frames":${relay.droppedFrames},"diagnostic_drops":${relay.diagnosticDrops},"slow_client_disconnects":${relay.slowClientDisconnects},"clients":${relay.clients},"last_source_frame_id":${relay.lastSourceFrameId},"last_sent_frame_id":${relay.lastSentFrameId},"server_error":${serverError?.let { "\"${jsonEscape(it)}\"" } ?: "null"}}"""
+        return """{"state":"${usb.state.wireName}","session_id":${usb.sessionId},"capabilities":${usb.capabilities},"system_actions":${usb.capabilities and NxpCupProtocol.CAPABILITY_SYSTEM_ACTIONS.toLong() != 0L},"usb_frames":${usb.frames},"usb_fps":${format(usb.framesPerSecond)},"usb_mib_s":${format(usb.mebibytesPerSecond)},"sequence_errors":${usb.sequenceErrors},"malformed_chunks":${usb.malformedChunks},"relay_mode":"${activeVideoMode.wireName}","relay_source_frames":${relay.sourceFrames},"relay_selected_frames":${relay.selectedFrames},"relay_sent_frames":${relay.sentFrames},"relay_sent_bytes":${relay.sentBytes},"relay_mbit_s":${format(relayMegabitsPerSecond)},"relay_last_sent_age_ms":${format(lastSentAgeMs)},"relay_dropped_frames":${relay.droppedFrames},"diagnostic_drops":${relay.diagnosticDrops},"slow_client_disconnects":${relay.slowClientDisconnects},"clients":${relay.clients},"last_source_frame_id":${relay.lastSourceFrameId},"last_sent_frame_id":${relay.lastSentFrameId},"server_error":${serverError?.let { "\"${jsonEscape(it)}\"" } ?: "null"}}"""
     }
 
     private fun selectVideoMode(mode: NxpCupRelayVideoMode) {

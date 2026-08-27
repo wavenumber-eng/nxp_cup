@@ -14,6 +14,9 @@ until a separate signing plan is explicitly approved.
 
 The generated `res/raw/relay_viewer.html` combines shared presentation from `src/web`
 with the Android-owned `web/relay_adapter.js`. Preserve its WebSocket, video-mode, and
-bounded decode behavior; never edit the generated page directly. Do not create a second
-relay implementation or split APK roles until the plan's lifecycle and app-role
-structure dependencies are satisfied. See `docs/design/shared-web-dashboard.md`.
+bounded decode behavior; never edit the generated page directly. It is the sole Android
+HTML resource and contains the current Formula One presentation, not the removed legacy
+page. Keep remote vehicle control limited to firmware-capability-gated Race Start and
+Stop with the deliberate hold-to-start behavior and bounded native action queue. Do not
+create a second relay implementation or split APK roles until the plan's lifecycle and
+app-role structure dependencies are satisfied. See `docs/design/shared-web-dashboard.md`.

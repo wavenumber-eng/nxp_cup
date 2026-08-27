@@ -54,6 +54,7 @@ object NxpCupProtocol {
     const val SYSTEM_ACTION_STOP: Int = 2
     const val RACE_START_CONFIRMATION: Int = 0x21214F47
 
+    const val CONTROL_STATUS_OK: Int = 0
     const val CONTROL_STATUS_NOT_READY: Int = 6
     const val CONTROL_STATUS_DENIED: Int = 7
 }

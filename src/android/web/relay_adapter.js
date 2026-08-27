@@ -11,6 +11,7 @@
   const MAX_MSE_QUEUE = 48;
   const MAX_TELEMETRY_SIGNALS = 32;
   const MSG_TELEMETRY = 0x01000500;
+  const CAPABILITY_SYSTEM_ACTIONS = 1 << 7;
   const TELEMETRY_TEXT_MAX_BYTES = 48;
 
   const dashboard = window.NxpCupDashboard.create();
@@ -19,6 +20,10 @@
   const telemetryBody = document.getElementById("telemetryTableBody");
   const canvas = document.getElementById("frameCanvas");
   const video = document.getElementById("h264Video");
+  const raceControls = document.getElementById("raceControls");
+  const raceStartButton = document.getElementById("raceStartButton");
+  const raceStopButton = document.getElementById("raceStopButton");
+  const raceControlStatus = document.getElementById("raceControlStatus");
   const context = canvas.getContext("2d", { alpha: false });
   const rawImage = context.createImageData(320, 200);
   const telemetryRows = new Map();
@@ -39,6 +44,11 @@
   let sourceBuffer = null;
   let mediaUrl = null;
   let mseQueue = [];
+  let helloCapabilities = 0;
+  let systemMode = "";
+  let systemState = "";
+  let socketConnected = false;
+  let raceStartHoldTimer = null;
 
   document.querySelectorAll("[data-video]").forEach((button) => {
     const active = button.dataset.video === requestedVideo;
@@ -49,6 +59,69 @@
   function setStatus(label, connected = false, live = false) {
     status.textContent = label;
     dashboard.setConnection({ connected, live, label });
+  }
+
+  function setRaceControls() {
+    const actionsSupported = socketConnected && (helloCapabilities & CAPABILITY_SYSTEM_ACTIONS) !== 0;
+    const raceWaiting = systemMode === "RACE / WAITING";
+    const raceRunning = systemMode === "RACE RUNNING";
+    const raceMode = raceWaiting || raceRunning;
+    const raceReady = raceWaiting && systemState === "READY TO START";
+    raceControls.hidden = !raceMode;
+    raceControls.classList.toggle("waiting", raceWaiting);
+    raceControls.classList.toggle("running", raceRunning);
+    raceStartButton.hidden = !raceWaiting;
+    raceStartButton.disabled = !actionsSupported || !raceReady;
+    raceStartButton.classList.toggle("ready", actionsSupported && raceReady);
+    raceStopButton.hidden = !raceMode;
+    raceStopButton.disabled = !actionsSupported;
+  }
+
+  function cancelRaceStartHold() {
+    if (raceStartHoldTimer !== null) {
+      clearTimeout(raceStartHoldTimer);
+      raceStartHoldTimer = null;
+    }
+    raceStartButton.classList.remove("holding");
+  }
+
+  function requestSystemAction(action) {
+    if (!currentSocket || !socketConnected) {
+      raceControlStatus.textContent = "Race action unavailable: relay is disconnected";
+      setRaceControls();
+      return;
+    }
+    raceControlStatus.textContent = action === "stop" ? "Sending STOP..." : "Requesting race start...";
+    currentSocket.send(JSON.stringify({ type: "system_action", action }));
+  }
+
+  function beginRaceStartHold() {
+    if (raceStartButton.disabled || raceStartHoldTimer !== null) return;
+    raceStartButton.classList.add("holding");
+    raceControlStatus.textContent = "Keep holding to start the race...";
+    raceStartHoldTimer = setTimeout(() => {
+      raceStartHoldTimer = null;
+      raceStartButton.classList.remove("holding");
+      requestSystemAction("race_start");
+    }, 1500);
+  }
+
+  function receiveSystemActionResult(message) {
+    let result;
+    try { result = JSON.parse(message); } catch (_) { return; }
+    if (result?.type !== "system_action_result") return;
+    const start = result.action === "race_start";
+    const messages = {
+      queued: start ? "Race start queued for the car..." : "STOP queued for the car...",
+      accepted: start ? "Race start accepted; awaiting state telemetry" : "STOP accepted; outputs disabled",
+      not_ready: "Start rejected: the camera is not ready",
+      denied: "Action denied by the firmware state machine",
+      busy: "Another race action is already pending",
+      unavailable: "Race actions are unavailable on this USB session",
+      superseded: "Race start cancelled by STOP",
+      failed: `Race action failed: ${result.detail || "unknown error"}`,
+    };
+    raceControlStatus.textContent = messages[result.outcome] || result.detail || "Unknown race action result";
   }
 
   function noteDisplayedFrame(label) {
@@ -175,6 +248,9 @@
 
   function updateTelemetryRow(sample) {
     dashboard.updateTelemetry(sample);
+    if (sample.name === "system.mode") systemMode = String(sample.value);
+    if (sample.name === "system.state") systemState = String(sample.value);
+    if (sample.name === "system.mode" || sample.name === "system.state") setRaceControls();
     let row = telemetryRows.get(sample.name);
     if (!row) {
       if (telemetryRows.size >= MAX_TELEMETRY_SIGNALS) return;
@@ -275,13 +351,23 @@
     const socket = new WebSocket(`${protocol}://${location.host}/stream?${streamParameters}`);
     currentSocket = socket;
     socket.binaryType = "arraybuffer";
-    socket.onopen = () => setStatus(`Connected (${requestedVideo}); waiting for frame...`, true, false);
-    socket.onmessage = (event) => receivePacket(event.data);
+    socket.onopen = () => {
+      socketConnected = true;
+      setStatus(`Connected (${requestedVideo}); waiting for frame...`, true, false);
+      setRaceControls();
+    };
+    socket.onmessage = (event) => {
+      if (typeof event.data === "string") receiveSystemActionResult(event.data);
+      else receivePacket(event.data);
+    };
     socket.onerror = () => socket.close();
     socket.onclose = () => {
       if (currentSocket !== socket) return;
       currentSocket = null;
+      socketConnected = false;
+      cancelRaceStartHold();
       setStatus("Disconnected; retrying...", false, false);
+      setRaceControls();
       setTimeout(connect, 1000);
     };
   }
@@ -289,7 +375,10 @@
   async function pollHealth() {
     try {
       const response = await fetch("/health", { cache: "no-store" });
-      health.textContent = JSON.stringify(await response.json(), null, 2);
+      const snapshot = await response.json();
+      helloCapabilities = Number(snapshot.capabilities) || 0;
+      health.textContent = JSON.stringify(snapshot, null, 2);
+      setRaceControls();
     } catch (error) {
       health.textContent = `Health error: ${error}`;
     }
@@ -297,6 +386,26 @@
   }
 
   setStatus("Connecting...", false, false);
+  raceStartButton.addEventListener("pointerdown", (event) => {
+    if (event.button === 0) beginRaceStartHold();
+  });
+  for (const eventName of ["pointerup", "pointercancel", "pointerleave"]) {
+    raceStartButton.addEventListener(eventName, cancelRaceStartHold);
+  }
+  raceStartButton.addEventListener("keydown", (event) => {
+    if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+      event.preventDefault();
+      beginRaceStartHold();
+    }
+  });
+  raceStartButton.addEventListener("keyup", (event) => {
+    if (event.key === " " || event.key === "Enter") cancelRaceStartHold();
+  });
+  raceStopButton.addEventListener("click", () => {
+    cancelRaceStartHold();
+    requestSystemAction("stop");
+  });
+  setRaceControls();
   connect();
   void pollHealth();
 })();

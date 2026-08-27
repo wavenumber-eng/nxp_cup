@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Interactive guide to the Wavenumber NXP Cup firmware structure, modes, dispatch, callbacks, and safety boundaries.">
+  <title>How the Firmware Runs | Wavenumber NXP Cup</title>
+  <!-- __GENERATED_NOTICE__ -->
+  <!-- __LESSON_CSS__ -->
+</head>
+<body class="framework-lesson">
+  <header class="lesson-bar">
+    <span>NXP CUP &middot; FIRMWARE &middot; 03</span>
+    <span>FRAME &rarr; MODE &rarr; CALLBACK &rarr; OUTPUT</span>
+  </header>
+
+  <main>
+    <section class="framework-hero" aria-labelledby="page-title">
+      <div class="framework-hero-copy">
+        <p class="lesson-kicker">The mental model</p>
+        <h1 id="page-title">You write one bounded decision.<br>The framework runs the car.</h1>
+        <p class="framework-lede">Camera capture, mode selection, timing, display, telemetry, and actuator safety remain inside the framework. Your code is called only when the current mode and a fresh frame permit it.</p>
+        <nav class="framework-jump" aria-label="Lesson sections">
+          <a href="#map">01 &middot; map</a>
+          <a href="#dispatch-lab">02 &middot; dispatch</a>
+          <a href="#callback">03 &middot; callback</a>
+          <a href="#workflow">04 &middot; workflow</a>
+        </nav>
+      </div>
+      <div class="ownership-stamp" aria-label="Student and framework ownership summary">
+        <div><span>YOU OWN</span><strong>analysis + decisions</strong><small><code>vision_test.c</code><br><code>race_mode.c</code></small></div>
+        <div><span>FRAMEWORK OWNS</span><strong>when + whether they run</strong><small>buffers &middot; modes &middot; safety &middot; I/O</small></div>
+      </div>
+    </section>
+
+    <section id="map" class="architecture-section" aria-labelledby="map-title">
+      <div class="section-heading">
+        <div><p class="model-number">01 &middot; REPOSITORY MAP</p><h2 id="map-title">Four components. One student-sized surface.</h2></div>
+        <p>Start at the outside; edit only the highlighted app layer.</p>
+      </div>
+
+      <div class="repo-map" role="list" aria-label="Repository component map">
+        <article class="repo-card repo-card-active" role="listitem">
+          <span class="repo-index">01</span>
+          <div><h3>embedded</h3><p>MCXN947 firmware, camera, display, controls, encoders, actuators, and the student callbacks.</p></div>
+          <code>src/embedded</code>
+          <b>STUDENT WORK LIVES HERE</b>
+        </article>
+        <article class="repo-card" role="listitem">
+          <span class="repo-index">02</span>
+          <div><h3>host</h3><p>Windows viewer, command-line flash tool, and direct browser viewer.</p></div>
+          <code>src/host</code>
+          <b>CONSUMES TELEMETRY</b>
+        </article>
+        <article class="repo-card" role="listitem">
+          <span class="repo-index">03</span>
+          <div><h3>android</h3><p>Maintainer USB-host and Wi-Fi telemetry relay for a phone.</p></div>
+          <code>src/android</code>
+          <b>OPTIONAL RELAY</b>
+        </article>
+        <article class="repo-card" role="listitem">
+          <span class="repo-index">04</span>
+          <div><h3>common</h3><p>Linked libraries shared by embedded and host consumers.</p></div>
+          <code>src/common</code>
+          <b>SHARED, NOT AN APP FOLDER</b>
+        </article>
+      </div>
+
+      <div class="source-stack" aria-label="Embedded firmware source layers">
+        <div class="stack-label"><span>inside</span><strong>nxp_cup_core0/source</strong><span>outside</span></div>
+        <article class="stack-layer stack-student">
+          <span>STUDENT LAYER</span>
+          <div><strong>app/vision_test.c</strong><small>safe visual experiments</small></div>
+          <div><strong>app/race_mode.c</strong><small>your frame-to-control pass</small></div>
+          <div><strong>app/my_module.c + .h</strong><small>optional helper modules</small></div>
+        </article>
+        <article class="stack-layer stack-api">
+          <span>PUBLIC CONTRACT</span>
+          <div><strong>nxp_cup.h</strong><small>the only platform header student modules include</small></div>
+        </article>
+        <article class="stack-layer">
+          <span>DISPATCH</span>
+          <div><strong>main.c</strong><small>takes the newest frame and chooses a callback</small></div>
+          <div><strong>app/test_mode.c</strong><small>routes the selected TEST page</small></div>
+        </article>
+        <article class="stack-layer stack-private">
+          <span>FRAMEWORK PRIVATE</span>
+          <div><strong>nxpc_framework.c</strong><small>frame lifetime, timing, presentation, leases</small></div>
+          <div><strong>nxpc_system.c</strong><small>mode transitions and safe outputs</small></div>
+          <div><strong>nxpc_io/</strong><small>camera, display, USB, PWM, QDC, inputs</small></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="frame-route-section" aria-labelledby="route-title">
+      <div class="section-heading">
+        <div><p class="model-number">THE FOREGROUND LOOP</p><h2 id="route-title">Follow one accepted camera frame</h2></div>
+        <p>The framework keeps only the newest pending frame.</p>
+      </div>
+      <ol class="frame-route">
+        <li><span>01</span><b>Camera completes RGB565 frame</b><small>producer marks the latest buffer ready</small></li>
+        <li><span>02</span><b><code>nxpc_framework__service()</code></b><small>inputs, mode, safety, USB, display</small></li>
+        <li><span>03</span><b><code>nxpc_framework__take_latest_frame()</code></b><small>returns a fresh frame or <code>NULL</code></small></li>
+        <li class="route-decision"><span>04</span><b>switch on current mode</b><small>TEST / RACE RUNNING / no callback</small></li>
+        <li><span>05</span><b>time the selected callback</b><small>41 ms budget; three overruns fault</small></li>
+        <li><span>06</span><b><code>nxpc_framework__finish_frame(frame)</code></b><small>publish bounded presentation, then release</small></li>
+      </ol>
+      <div class="latest-frame-note">
+        <strong>Why no queue?</strong>
+        <p>If a new frame arrives before an older pending frame is accepted, the older one is replaced and the drop counter rises. Latency stays bounded: student code works from the newest view, not an increasingly stale backlog.</p>
+      </div>
+      <details class="dispatch-source">
+        <summary>See the real <code>main.c</code> dispatch</summary>
+        <pre><code><span class="code-keyword">while</span> (1) {
+    nxpc_framework__service();
+    frame = nxpc_framework__take_latest_frame();
+    <span class="code-keyword">if</span> (frame == NULL) <span class="code-keyword">continue</span>;
+
+    <span class="code-keyword">switch</span> (nxpc_system__mode()) {
+    <span class="code-keyword">case</span> NXPC_SYSTEM_MODE_TEST:
+        nxpc_framework__begin_callback();
+        test_mode_on_frame(frame);
+        nxpc_framework__end_callback();
+        <span class="code-keyword">break</span>;
+    <span class="code-keyword">case</span> NXPC_SYSTEM_MODE_RACE_RUNNING:
+        nxpc_framework__begin_callback();
+        race_mode_on_frame(frame);
+        nxpc_framework__end_callback();
+        <span class="code-keyword">break</span>;
+    <span class="code-keyword">default</span>:
+        nxpc_framework__no_callback();
+        <span class="code-keyword">break</span>;
+    }
+    nxpc_framework__finish_frame(frame);
+}</code></pre>
+      </details>
+    </section>
+
+    <section id="dispatch-lab" class="dispatch-section" aria-labelledby="dispatch-title">
+      <div class="section-heading section-heading-light">
+        <div><p class="model-number">02 &middot; INTERACTIVE DISPATCH</p><h2 id="dispatch-title">Ask the framework what runs next</h2></div>
+        <p>Use the controls, then send a frame.</p>
+      </div>
+
+      <div class="dispatch-lab">
+        <div class="dispatch-controls">
+          <div class="lab-control-group">
+            <span class="lab-label">PHYSICAL INPUT</span>
+            <button id="jumper-button" class="lab-button lab-button-wide" type="button" aria-pressed="false">
+              <i aria-hidden="true"></i><span>TEST jumper</span><b id="jumper-value">REMOVED</b>
+            </button>
+          </div>
+          <div class="lab-control-group">
+            <span class="lab-label">TEST PAGE</span>
+            <div class="segmented-control" role="group" aria-label="Selected test page">
+              <button type="button" data-test-page="camera" aria-pressed="true">CAMERA / IO</button>
+              <button type="button" data-test-page="vision" aria-pressed="false">VISION</button>
+              <button type="button" data-test-page="motors" aria-pressed="false">MOTORS</button>
+            </div>
+          </div>
+          <div class="lab-actions">
+            <button id="exe-button" class="lab-button" type="button"><span>Release</span><b>EXE</b></button>
+            <button id="frame-button" class="lab-button lab-button-accent" type="button"><span>Camera</span><b>NEW FRAME</b></button>
+            <button id="fault-button" class="lab-button" type="button"><span>Safety</span><b>TRIGGER FAULT</b></button>
+            <button id="reset-button" class="lab-button lab-button-quiet" type="button"><span>Simulation</span><b>RESET</b></button>
+          </div>
+        </div>
+
+        <div class="dispatch-console" aria-live="polite">
+          <div class="console-state">
+            <div><span>CURRENT MODE</span><output id="mode-output">RACE_WAITING</output></div>
+            <div><span>CAMERA</span><output id="camera-output">NO FRAME YET</output></div>
+            <div><span>OUTPUTS</span><output id="outputs-output">SAFE / DISABLED</output></div>
+          </div>
+          <div class="dispatch-trace" aria-label="Current dispatch trace">
+            <div id="trace-frame" class="trace-node"><span>FRAME</span><b>waiting</b></div>
+            <i aria-hidden="true">&rarr;</i>
+            <div id="trace-mode" class="trace-node"><span>MODE</span><b>RACE_WAITING</b></div>
+            <i aria-hidden="true">&rarr;</i>
+            <div id="trace-callback" class="trace-node trace-node-result"><span>CALLBACK</span><b>none</b></div>
+          </div>
+          <div class="callback-card">
+            <span id="callback-file">main.c</span>
+            <strong id="callback-name">No student callback</strong>
+            <p id="callback-reason">Race waiting requires a live camera and an EXE release before race code can run.</p>
+          </div>
+          <ol id="event-log" class="event-log" aria-label="Simulation event log"></ol>
+        </div>
+      </div>
+
+      <div class="mode-strip" aria-label="Firmware modes">
+        <article><span>STARTUP</span><p>Initialize board, camera, display, USB, encoders, and safety.</p><b>no callback</b></article>
+        <article><span>TEST</span><p>Fresh frames enter the selected CAMERA / IO, VISION, or MOTORS page.</p><b><code>test_mode_on_frame(frame)</code></b></article>
+        <article><span>RACE_WAITING</span><p>Wait for a valid camera frame, then an EXE release.</p><b>no student callback</b></article>
+        <article><span>RACE_RUNNING</span><p>Every accepted frame enters the competition callback.</p><b><code>race_mode_on_frame()</code></b></article>
+        <article><span>ENTERING_ISP</span><p>Safe-stop before transferring control to the ROM programmer.</p><b>no callback</b></article>
+        <article><span>SAFE_FAULT</span><p>Latched stop after camera loss, callback overruns, or bootloader return.</p><b>outputs disabled</b></article>
+      </div>
+    </section>
+
+    <section id="callback" class="callback-section" aria-labelledby="callback-title">
+      <div class="section-heading">
+        <div><p class="model-number">03 &middot; CALLBACK CONTRACT</p><h2 id="callback-title">Borrow the frame. Finish one pass. Return.</h2></div>
+        <p><code>uint16_t *frame</code> is writable RGB565.</p>
+      </div>
+
+      <div class="callback-grid">
+        <article class="code-window">
+          <div class="code-window-bar"><span>app/race_mode.c</span><small>student-owned</small></div>
+          <pre><code><span class="code-keyword">void</span> race_mode_on_frame(<span class="code-keyword">uint16_t</span> *frame)
+{
+    <span class="code-comment">// 1. Choose rows with camera_row().</span>
+    <span class="code-comment">// 2. Inspect pixels / convert color.</span>
+    <span class="code-comment">// 3. Make your bounded decision.</span>
+    <span class="code-comment">// 4. Command steering and motors.</span>
+    <span class="code-comment">// 5. Publish useful telemetry.</span>
+
+    <span class="code-comment">// Then return promptly.</span>
+}</code></pre>
+        </article>
+        <div class="contract-rules">
+          <article class="rule-do"><span>DO</span><p>Read pixels, convert colors, draw temporary overlays, call the public API, and return within the frame budget.</p></article>
+          <article class="rule-dont"><span>DO NOT</span><p>Keep the frame pointer, free it, hand it to asynchronous work, include private drivers, or wait forever.</p></article>
+          <article class="rule-clock"><span>41 ms</span><p>is the callback budget. Three consecutive overruns enter <code>SAFE_FAULT</code>.</p></article>
+          <article class="rule-lease"><span>100 ms</span><p>is the motor command lease. Each accepted <code>motors_set_duty()</code> refreshes it.</p></article>
+        </div>
+      </div>
+
+      <div class="api-categories" aria-label="Public student API categories">
+        <article><span>SEE</span><h3>camera + color</h3><code>camera_row</code><code>color_rgb565_to_yhsv</code><code>frame_draw_*</code></article>
+        <article><span>READ</span><h3>controls + feedback</h3><code>input_alpha/beta/gamma</code><code>input_*_button</code><code>wheel_speed_*</code></article>
+        <article><span>COMMAND</span><h3>vehicle outputs</h3><code>steering_set</code><code>motors_set_duty</code><code>motors_stop</code></article>
+        <article><span>OBSERVE</span><h3>time + telemetry</h3><code>time_milliseconds</code><code>frame_processing_microseconds</code><code>telemetry_*</code></article>
+      </div>
+
+      <div class="safety-chain" aria-label="Motor safety chain">
+        <div><span>your request</span><strong><code>motors_set_duty()</code></strong></div>
+        <i aria-hidden="true">&rarr;</i>
+        <div><span>framework checks</span><strong>mode + arming + limits</strong></div>
+        <i aria-hidden="true">&rarr;</i>
+        <div><span>dead-man timer</span><strong>100 ms lease</strong></div>
+        <i aria-hidden="true">&rarr;</i>
+        <div><span>hardware output</span><strong>PWM or safe stop</strong></div>
+      </div>
+      <p class="safety-caption">Calling an actuator function is a request, not permission. The framework can clamp, reject, expire, or disable that request.</p>
+    </section>
+
+    <section class="test-dispatch-section" aria-labelledby="test-title">
+      <div class="section-heading">
+        <div><p class="model-number">TEST MODE</p><h2 id="test-title">One dispatcher, three focused examples</h2></div>
+        <p>The framework owns page navigation.</p>
+      </div>
+      <div class="test-dispatch-layout">
+        <pre class="dispatcher-code"><code><span class="code-keyword">switch</span> (test_mode_page()) {
+<span class="code-keyword">case</span> TEST_MODE_CAMERA_IO:
+    camera_test_on_frame(frame);
+    <span class="code-keyword">break</span>;
+<span class="code-keyword">case</span> TEST_MODE_VISION:
+    vision_test_on_frame(frame);
+    <span class="code-keyword">break</span>;
+<span class="code-keyword">case</span> TEST_MODE_MOTORS:
+    motor_test_on_frame(frame);
+    <span class="code-keyword">break</span>;
+}</code></pre>
+        <div class="test-page-cards">
+          <article><span>CAMERA / IO</span><strong>Observe first</strong><p>Reads controls and publishes telemetry. A small, safe API example.</p><b>example &middot; normally unchanged</b></article>
+          <article class="test-page-edit"><span>VISION</span><strong>Experiment here</strong><p>Editable Alpha-selected luma waveform and camera-processing exercise.</p><b>student-editable</b></article>
+          <article><span>MOTORS</span><strong>Verify carefully</strong><p>Maps pots to actuator commands, behind centered-pot arming and TEST limits.</p><b>example &middot; safety gated</b></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="workflow" class="workflow-section" aria-labelledby="workflow-title">
+      <div class="section-heading">
+        <div><p class="model-number">04 &middot; DAILY WORKFLOW</p><h2 id="workflow-title">Edit, build, flash, observe.</h2></div>
+        <p>Run commands from the repository root in PowerShell.</p>
+      </div>
+      <ol class="workflow-steps">
+        <li><span>01</span><div><b>Edit</b><code>src\embedded\nxp_cup_core0\source\app\vision_test.c</code><code>...\app\race_mode.c</code></div><p>Additional top-level <code>app/*.c</code> files are discovered automatically.</p></li>
+        <li><span>02</span><div><b>Build</b><code>.\src\embedded\build.ps1</code></div><p>The normal Rev A competition image is emitted under <code>out\artifacts\embedded</code>.</p></li>
+        <li><span>03</span><div><b>Flash</b><code>.\src\embedded\flash.ps1</code></div><p>ROM-HID through J11 is tried first; J-Link Commander is the fallback.</p></li>
+        <li><span>04</span><div><b>Observe</b><code>.\out\artifacts\host\nxpc_viewer.exe</code></div><p>Use overlays, named telemetry, logs, callback time, and frame drops.</p></li>
+      </ol>
+      <div class="workflow-footer">
+        <p><strong>Before motion:</strong> lift the driven wheels or disconnect motor power. TEST MOTORS still requires deliberate arming; RACE starts only after a live frame and EXE release.</p>
+        <p><strong>When adding code:</strong> include your own header and <code>nxp_cup.h</code>. Do not add a second build or flash path.</p>
+      </div>
+    </section>
+
+    <section class="remember-section" aria-labelledby="remember-title">
+      <p class="model-number">KEEP THIS MODEL</p>
+      <h2 id="remember-title">A fresh frame enters the foreground. The mode chooses one callback. Your callback borrows the frame and requests outputs. The framework times, presents, and safely releases everything.</h2>
+      <a href="#page-title">Back to top &uarr;</a>
+    </section>
+  </main>
+
+  <!-- __LESSON_JS__ -->
+</body>
+</html>
