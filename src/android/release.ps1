@@ -280,7 +280,7 @@ if (@($matchingTags | Where-Object { $_.ref -eq "refs/tags/$releaseTag" }).Count
 $releaseNotes = @"
 Maintainer Android USB-host and Wi-Fi telemetry relay for the NXP Cup platform.
 
-This `0.1.0` APK is the proven Moto G Power 5G (2023) development build. It is
+This `$Version` APK is the proven Moto G Power 5G (2023) development build. It is
 debug-signed, distributed outside an app store, and is not required for the student
 firmware workflow. Install with `adb install -r $assetName` when updating an app signed
 with the same certificate; otherwise uninstalling first also clears app data and USB

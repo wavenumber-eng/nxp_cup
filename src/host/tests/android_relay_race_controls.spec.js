@@ -121,7 +121,7 @@ test.beforeEach(async ({ page }) => {
       const samples = [
         ["battery.voltage", 7.4, "V"],
         ["wheel.left.rpm", 120, "RPM"],
-        ["wheel.right.rpm", 60, "RPM"],
+        ["wheel.right.rpm", -60, "RPM"],
         ["motor.left.command", .5, ""],
         ["motor.right.command", -.25, ""],
         ["steering.command", -.5, ""],
@@ -148,6 +148,7 @@ test("Android relay uses the F1 overlay instead of the legacy page", async ({ pa
   await expect(page.locator(".stage")).toBeVisible();
   await expect(page.locator(".hud .card")).toHaveCount(3);
   await expect(page.locator("#dashboardLive")).toHaveText("CONNECTED");
+  await expect(page.locator(".side-readout.battery")).toBeHidden();
   await expect(page.locator("h1")).toHaveCount(0);
 
   await page.evaluate(() => window.__nxpcRelaySendDashboardTelemetry());
@@ -155,22 +156,22 @@ test("Android relay uses the F1 overlay instead of the legacy page", async ({ pa
   await expect(page.locator("#dashboardLeftRpm")).toHaveText("120");
   await expect(page.locator("#dashboardRightRpm")).toHaveText("60");
   await expect(page.locator("#dashboardSpeed")).toHaveText("1.3");
+  await expect(page.locator('[data-telemetry-name="wheel.right.rpm"] td').nth(2)).toHaveText("-60");
   await expect(page.locator("#dashboardLeftCommand")).toHaveText("50%");
   await expect(page.locator("#dashboardRightCommand")).toHaveText("-25%");
   await expect(page.locator("#dashboardSteeringCommand")).toHaveText("-15");
 });
 
 test("dashboard side readouts do not overlap", async ({ page }) => {
-  const readouts = await page.locator(".side-readout").evaluateAll((elements) =>
+  const readouts = await page.locator(".side-readout:visible").evaluateAll((elements) =>
     elements.map((element) => {
       const bounds = element.getBoundingClientRect();
       return { top: bounds.top, bottom: bounds.bottom };
     }),
   );
 
-  expect(readouts).toHaveLength(3);
+  expect(readouts).toHaveLength(2);
   expect(readouts[1].top).toBeGreaterThanOrEqual(readouts[0].bottom);
-  expect(readouts[2].top).toBeGreaterThanOrEqual(readouts[1].bottom);
 });
 
 test("relay shows deliberate race controls and sends only after the start hold", async ({ page }) => {

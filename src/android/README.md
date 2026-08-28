@@ -19,14 +19,14 @@ published to `out\artifacts\android\nxp_cup_bridge.apk`.
 Create and validate a versioned GitHub Release candidate with:
 
 ```powershell
-.\src\android\release.ps1 -Version 1.0.0 -Offline
+.\src\android\release.ps1 -Version 1.0.1 -Offline
 ```
 
 The command checks the shared dashboard, runs browser and Android tests, performs a clean
 APK build, verifies package/version/signature metadata, and emits a versioned APK,
 SHA-256 file, and provenance manifest under `out\artifacts\android\releases`. From a
 clean commit already present on GitHub, add `-Publish` to create a verified immutable
-release. Version `1.0.0` remains a debug-signed maintainer build rather than an
+release. Version `1.0.1` remains a debug-signed maintainer build rather than an
 app-store or production-signing deliverable; the manifest records its signing-certificate
 digest so update compatibility is explicit.
 

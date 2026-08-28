@@ -182,15 +182,14 @@ test("generated dashboard pages are standalone and contain their distinct adapte
 test("right-side readouts do not overlap in a short wide viewport", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 480 });
   await page.goto(relayUrl("jpeg"));
-  const boxes = await page.locator(".side-readout").evaluateAll((elements) =>
+  const boxes = await page.locator(".side-readout:visible").evaluateAll((elements) =>
     elements.map((element) => {
       const box = element.getBoundingClientRect();
       return { top: box.top, bottom: box.bottom };
     }),
   );
-  expect(boxes).toHaveLength(3);
+  expect(boxes).toHaveLength(2);
   expect(boxes[0].bottom).toBeLessThan(boxes[1].top);
-  expect(boxes[1].bottom).toBeLessThan(boxes[2].top);
 });
 
 for (const mode of ["jpeg", "h264", "raw"]) {

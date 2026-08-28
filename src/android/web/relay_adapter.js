@@ -24,6 +24,7 @@
   const raceStartButton = document.getElementById("raceStartButton");
   const raceStopButton = document.getElementById("raceStopButton");
   const raceControlStatus = document.getElementById("raceControlStatus");
+  const batteryReadout = document.querySelector(".side-readout.battery");
   const context = canvas.getContext("2d", { alpha: false });
   const rawImage = context.createImageData(320, 200);
   const telemetryRows = new Map();
@@ -49,6 +50,8 @@
   let systemState = "";
   let socketConnected = false;
   let raceStartHoldTimer = null;
+
+  if (batteryReadout) batteryReadout.hidden = true;
 
   document.querySelectorAll("[data-video]").forEach((button) => {
     const active = button.dataset.video === requestedVideo;
@@ -247,7 +250,12 @@
   }
 
   function updateTelemetryRow(sample) {
-    dashboard.updateTelemetry(sample);
+    const numeric = Number(sample.value);
+    const dashboardSample =
+      (sample.name === "wheel.left.rpm" || sample.name === "wheel.right.rpm") && Number.isFinite(numeric)
+        ? { ...sample, value: Math.abs(numeric) }
+        : sample;
+    dashboard.updateTelemetry(dashboardSample);
     if (sample.name === "system.mode") systemMode = String(sample.value);
     if (sample.name === "system.state") systemState = String(sample.value);
     if (sample.name === "system.mode" || sample.name === "system.state") setRaceControls();
